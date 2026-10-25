@@ -108,3 +108,7 @@ features react to. Instead the mod replicates their success test (`IsSuccessRoll
 - Cursor-hover idea from the "Estimated THC" option in [Prestige Plus](https://github.com/YLMstring/Prestige-Plus) (MIT).
 - Achievement approach from [ToyBox](https://github.com/cabarius/ToyBox) (MIT).
 - Built with [Unity Mod Manager](https://www.nexusmods.com/site/mods/21) and [Harmony](https://github.com/pardeike/Harmony).
+
+## License
+
+[MIT](LICENSE)
