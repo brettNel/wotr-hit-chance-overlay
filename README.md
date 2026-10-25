@@ -88,18 +88,6 @@ is installed elsewhere, create `GamePath.props` next to the `.sln` (it's git-ign
 features react to. Instead the mod replicates their success test (`IsSuccessRoll`) over all 20 faces of the die. Pure
 *calculation* rules (`RuleCalculateAC`, `RuleCalculateAttackBonus`) are safe to trigger.
 
-### Test checklist
-
-- [ ] Melee attack: with *Show details* on, the bonus vs AC matches the combat log after attacking
-- [ ] Ranged attack into melee (the −4 should be in the bonus)
-- [ ] Enemy with Blur / Displacement (20% / 50% concealment) and Mirror Image
-- [ ] Scorching Ray, Shocking Grasp (held charge), Magic Missile vs. spell resistance
-- [ ] Hold Person / Fireball: DC matches the combat log
-- [ ] Inflict Light Wounds on undead → red `HEAL`; Cure Light Wounds on a party member → green `HEAL`
-- [ ] Fire spell on a fire-immune creature, mind-affecting spell on a golem → `IMMUNE`
-- [ ] A scroll and a wand; real-time and turn-based mode
-- [ ] Achievements list doesn't say achievements are disabled
-
 **Logs:** Unity Mod Manager's *Logs* tab, or
 `%USERPROFILE%\AppData\LocalLow\Owlcat Games\Pathfinder Wrath Of The Righteous\Player.log` (lines start with `[HitChanceOverlay]`).
 
