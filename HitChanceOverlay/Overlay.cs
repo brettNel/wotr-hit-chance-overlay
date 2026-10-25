@@ -72,6 +72,17 @@ internal class Overlay : MonoBehaviour {
         if (!attacker.IsDirectlyControllable) {
             return Hidden($"{what}: {attacker.CharacterName} is not directly controllable");
         }
+        // Turn-based: hide when clicking wouldn't attack/cast this turn. Same checks the game uses for the cursor
+        // (CursorController.SetUnitTBMCursor): out of range, or a weapon click that would only move.
+        if (CombatController.IsInTurnBasedCombat()) {
+            var actionState = attacker.CombatState.TBM.ActionState;
+            if (actionState.IsOutOfRange) {
+                return Hidden($"{what}: target out of range this turn");
+            }
+            if (ability == null && actionState.IsMove() && !actionState.IsAttack()) {
+                return Hidden($"{what}: clicking would only move");
+            }
+        }
 
         if (ability != null) {
             var prediction = OddsCalculator.ForAbility(ability, target);
