@@ -7,6 +7,7 @@ using Kingmaker.Enums;
 using Kingmaker.Items;
 using Kingmaker.RuleSystem;
 using Kingmaker.RuleSystem.Rules;
+using Kingmaker.Settings;
 using Kingmaker.UnitLogic;
 using Kingmaker.UnitLogic.Abilities;
 using Kingmaker.UnitLogic.Abilities.Blueprints;
@@ -46,7 +47,7 @@ internal static class OddsCalculator {
             return null;
         }
         var p = new Prediction { Title = weapon.Name };
-        var first = CalculateAttack(attacker, target, weapon, 0);
+        var first = CalculateAttack(attacker, target, weapon, 0, weaponAttack: true);
         AddAttackLines(p, first, "to hit");
         p.SetPercent(first.FinalPercent);
 
@@ -56,7 +57,7 @@ internal static class OddsCalculator {
         if (iteratives > 1 && !first.AutoHit) {
             var parts = new List<string>();
             for (int i = 0; i < iteratives; i++) {
-                parts.Add($"{CalculateAttack(attacker, target, weapon, 5 * i).FinalPercent}%");
+                parts.Add($"{CalculateAttack(attacker, target, weapon, 5 * i, weaponAttack: true).FinalPercent}%");
             }
             p.Add("Full attack: " + string.Join(" / ", parts), Tone.Dim);
         }
@@ -64,7 +65,7 @@ internal static class OddsCalculator {
         // Off-hand weapon (two-weapon fighting penalties are applied by the game's own attack bonus rule).
         var offHand = attacker.Body.SecondaryHand;
         if (offHand.MaybeShield == null && offHand.MaybeWeapon is { } offWeapon && offWeapon != weapon) {
-            var odds = CalculateAttack(attacker, target, offWeapon, 0);
+            var odds = CalculateAttack(attacker, target, offWeapon, 0, weaponAttack: true);
             p.Add($"Off-hand ({offWeapon.Name}): {odds.FinalPercent}%", ToneFor(odds.FinalPercent));
         }
         return p;
@@ -124,7 +125,7 @@ internal static class OddsCalculator {
         // 1. Attack roll (touch / ray / attack-roll projectile)
         var attackWeapon = GetAbilityAttackWeapon(payload);
         if (attackWeapon != null) {
-            var attack = CalculateAttack(caster, target, GetWeaponEntity(attackWeapon), 0);
+            var attack = CalculateAttack(caster, target, GetWeaponEntity(attackWeapon), 0, weaponAttack: false);
             AddAttackLines(p, attack, attackWeapon.AttackType.IsTouch() ? "to hit (touch)" : "to hit");
             chances.Add(attack.FinalPercent);
         }
@@ -174,12 +175,12 @@ internal static class OddsCalculator {
 
     // ---------- attack rolls ----------
 
-    internal readonly record struct AttackOdds(int AttackBonus, int TargetAC, int RollPercent, int ConcealmentPercent, int MirrorImages, bool AutoHit, bool TouchAC) {
+    internal readonly record struct AttackOdds(int AttackBonus, int TargetAC, int RollPercent, int ConcealmentPercent, int MirrorImages, bool AutoHit, bool TouchAC, string PendingToggles = null) {
         // Concealment is rolled first, then the d20; a hit then strikes the real target with chance 1/(images+1).
         public int FinalPercent => AutoHit ? 100 : (int)Math.Round(RollPercent * (100 - ConcealmentPercent) / 100.0 / (MirrorImages + 1));
     }
 
-    private static AttackOdds CalculateAttack(UnitEntityData attacker, UnitEntityData target, ItemEntityWeapon weapon, int penalty) {
+    private static AttackOdds CalculateAttack(UnitEntityData attacker, UnitEntityData target, ItemEntityWeapon weapon, int penalty, bool weaponAttack) {
         var attackType = weapon.Blueprint.AttackType;
 
         // Mirrors RuleAttackRoll.OnTrigger: attacking yourself, or touching a non-hostile, always hits.
@@ -190,7 +191,20 @@ internal static class OddsCalculator {
         }
 
         int ac = Rulebook.Trigger(new RuleCalculateAC(attacker, target, attackType)).Result;
-        int ab = Rulebook.Trigger(new RuleCalculateAttackBonus(attacker, target, weapon, penalty)).Result;
+        var attackBonus = Rulebook.Trigger(new RuleCalculateAttackBonus(attacker, target, weapon, penalty));
+        int ab = attackBonus.Result;
+
+        // Toggles like Fight Defensively only apply their buff once a weapon attack starts; add what they will add.
+        var pending = weaponAttack ? PendingToggles.AttackBonus(attacker, weapon) : default;
+        if (pending.AttackBonus != 0) {
+            // Mirrors the end of RuleCalculateAttackBonus.OnTrigger: on easier difficulties a party member's attack bonus
+            // can't drop below BAB - penalty - 2 (added as a Difficulty modifier). Redo that floor with the toggle included.
+            int floor = attackBonus.AllBonuses.Where(m => m.Descriptor == ModifierDescriptor.Difficulty).Sum(m => m.Value);
+            ab = ab - floor + pending.AttackBonus;
+            if (attacker.IsPlayerFaction && (bool)SettingsRoot.Difficulty.DeadCompanionsRiseAfterCombat) {
+                ab = Math.Max(ab, attacker.Stats.BaseAttackBonus.ModifiedValue - penalty - 2);
+            }
+        }
         bool alwaysChance = attacker.State.Features.AlwaysChance;
 
         // Mirrors RuleAttackRoll.IsSuccessRoll.
@@ -203,7 +217,7 @@ internal static class OddsCalculator {
         };
         // Mirrors the mirror image block in RuleAttackRoll.OnTrigger (UnitPartMirrorImage.TryAbsorbHit).
         int images = attacker.Descriptor.IsImmuneToVisualEffects ? 0 : target.Get<UnitPartMirrorImage>()?.MechanicsImages.Count ?? 0;
-        return new AttackOdds(ab, ac, rollPercent, concealment, images, false, attackType.IsTouch());
+        return new AttackOdds(ab, ac, rollPercent, concealment, images, false, attackType.IsTouch(), pending.Names);
     }
 
     private static void AddAttackLines(Prediction p, AttackOdds odds, string label) {
@@ -222,6 +236,9 @@ internal static class OddsCalculator {
         }
         if (odds.MirrorImages > 0) {
             text += $", {odds.MirrorImages} mirror image{(odds.MirrorImages == 1 ? "" : "s")}";
+        }
+        if (odds.PendingToggles != null) {
+            text += $" (incl. {odds.PendingToggles})";
         }
         p.Add(text, Tone.Dim);
     }
