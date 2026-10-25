@@ -195,7 +195,7 @@ internal static class OddsCalculator {
         int ab = attackBonus.Result;
 
         // Toggles like Fight Defensively only apply their buff once a weapon attack starts; add what they will add.
-        var pending = weaponAttack ? PendingToggles.AttackBonus(attacker, weapon) : default;
+        var pending = weaponAttack ? PendingToggles.AttackBonus(attacker, target, weapon) : default;
         if (pending.AttackBonus != 0) {
             // Mirrors the end of RuleCalculateAttackBonus.OnTrigger: on easier difficulties a party member's attack bonus
             // can't drop below BAB - penalty - 2 (added as a Difficulty modifier). Redo that floor with the toggle included.

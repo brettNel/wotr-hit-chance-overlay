@@ -25,15 +25,23 @@ namespace HitChanceOverlay;
 /// 2. Toggles whose buff only holds an AddInitiatorAttackWithWeaponTrigger(TriggerBeforeAttack) that applies the real
 ///    "effect" buff right before each attack (Power Attack, Deadly Aim, Piranha Strike).
 ///
-/// For both we work out the attack bonus the buff WILL add, without applying anything, by evaluating its components
+/// 3. The Point-Blank Shot toggle (PointBlankRange) caps ranged weapon range at 30 ft, so against a farther target the
+///    character walks in before shooting and "within X ft" bonuses (DistanceAttackBonus) will apply at the firing spot.
+///
+/// For 1 and 2 we work out the attack bonus the buff WILL add, without applying anything, by evaluating its components
 /// with the same context the game would build (BuffCollection.AddBuff → parentContext.CloneFor(buff, owner)).
 /// </summary>
 internal static class PendingToggles {
     internal readonly record struct Pending(int AttackBonus, string Names);
 
-    public static Pending AttackBonus(UnitEntityData attacker, ItemEntityWeapon weapon) {
+    public static Pending AttackBonus(UnitEntityData attacker, UnitEntityData target, ItemEntityWeapon weapon) {
         int total = 0;
         List<string> names = null;
+        try {
+            PointBlankApproach(attacker, target, weapon, ref total, ref names);
+        } catch (Exception e) {
+            Overlay.LogOnce("Could not preview point-blank approach: " + e);
+        }
         foreach (var ability in attacker.ActivatableAbilities.RawFacts) {
             if (!ability.IsOn) {
                 continue;
@@ -49,6 +57,30 @@ internal static class PendingToggles {
             }
         }
         return new Pending(total, names == null ? null : string.Join(", ", names));
+    }
+
+    // Mirrors UnitDescriptor.GetWeaponRange (PointBlankRange caps range at 30 ft) and DistanceAttackBonus.OnEventAboutToTrigger.
+    private static void PointBlankApproach(UnitEntityData attacker, UnitEntityData target, ItemEntityWeapon weapon, ref int total, ref List<string> names) {
+        if (!attacker.State.Features.PointBlankRange || !weapon.Blueprint.IsRanged || weapon.Blueprint.AttackRange.Value <= 30) {
+            return;
+        }
+        float distance = target.DistanceTo(attacker);
+        foreach (var fact in attacker.Facts.List) {
+            if (!fact.Active) {
+                continue;
+            }
+            foreach (var component in fact.Components) {
+                if (!component.IsActive || component.SourceBlueprintComponent is not DistanceAttackBonus bonus || bonus.Range.Value < 30) {
+                    continue;
+                }
+                // Already applied by the game's own rule when we're within range now.
+                if (distance <= bonus.Range.Meters + target.Corpulence + attacker.Corpulence) {
+                    continue;
+                }
+                total += bonus.AttackBonus;
+                (names ??= new()).Add($"{fact.Name} {(bonus.AttackBonus > 0 ? "+" : "")}{bonus.AttackBonus} after moving in");
+            }
+        }
     }
 
     private static int PendingBonus(UnitEntityData attacker, ActivatableAbility ability, ItemEntityWeapon weapon) {
