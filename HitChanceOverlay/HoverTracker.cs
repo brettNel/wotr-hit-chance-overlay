@@ -1,23 +1,31 @@
 using HarmonyLib;
+using Kingmaker;
 using Kingmaker.EntitySystem.Entities;
 using Kingmaker.UI;
+using TurnBased.Controllers;
 
 namespace HitChanceOverlay;
 
 /// <summary>
-/// Remembers which unit the mouse is over. The game calls CursorController.SetUnitCursor
-/// whenever a unit gains or loses hover highlight, in both real-time and turn-based modes.
+/// Works out which unit the mouse is over.
+/// Real-time: the game calls CursorController.SetUnitCursor whenever a unit gains or loses hover highlight.
+/// Turn-based: the TurnController tracks the hovered unit itself (m_HighlightedUnit) and does NOT call
+/// SetUnitCursor while an ability is selected, so we read its field directly.
 /// </summary>
 [HarmonyPatch(typeof(CursorController), nameof(CursorController.SetUnitCursor))]
 internal static class HoverTracker {
-    public static UnitEntityData HoveredUnit { get; private set; }
+    private static UnitEntityData s_RealTimeHovered;
+
+    public static UnitEntityData HoveredUnit => CombatController.IsInTurnBasedCombat()
+        ? Game.Instance.TurnBasedCombatController?.CurrentTurn?.m_HighlightedUnit
+        : s_RealTimeHovered;
 
     [HarmonyPostfix]
     private static void Postfix(bool isUnitHighlighted, UnitEntityData hoveredUnit) {
         if (isUnitHighlighted) {
-            HoveredUnit = hoveredUnit;
-        } else if (HoveredUnit == hoveredUnit) {
-            HoveredUnit = null;
+            s_RealTimeHovered = hoveredUnit;
+        } else if (s_RealTimeHovered == hoveredUnit) {
+            s_RealTimeHovered = null;
         }
     }
 }

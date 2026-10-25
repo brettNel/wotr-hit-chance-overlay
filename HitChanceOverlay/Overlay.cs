@@ -50,9 +50,6 @@ internal class Overlay : MonoBehaviour {
         if (target == null || !target.IsInGame || target.Descriptor.State.IsDead) {
             return null;
         }
-        if (!Main.Settings.ShowOutOfCombat && !game.Player.IsInCombat) {
-            return null;
-        }
 
         UnitEntityData attacker;
         AbilityData ability;
@@ -64,17 +61,31 @@ internal class Overlay : MonoBehaviour {
             ability = game.SelectedAbilityHandler?.SelectedAbility;
             attacker = ability?.Caster?.Unit ?? game.SelectionCharacter?.FirstSelectedUnit;
         }
+        string what = ability?.Blueprint.name ?? "weapon";
+        if (!Main.Settings.ShowOutOfCombat && !game.Player.IsInCombat) {
+            return Hidden($"{what}: not in combat (tick \"Show outside of combat\" to change)");
+        }
         // During an enemy's turn SelectedUnit is that enemy; we only care about units the player controls.
-        if (attacker == null || !attacker.IsDirectlyControllable) {
-            return null;
+        if (attacker == null) {
+            return Hidden($"{what}: no attacker found");
+        }
+        if (!attacker.IsDirectlyControllable) {
+            return Hidden($"{what}: {attacker.CharacterName} is not directly controllable");
         }
 
         if (ability != null) {
-            return OddsCalculator.ForAbility(ability, target);
+            var prediction = OddsCalculator.ForAbility(ability, target);
+            return prediction ?? Hidden($"{what} on {target.Blueprint.name}: {ability.CantTargetReason(new Kingmaker.Utility.TargetWrapper(target)) ?? "can't target (no reason given)"}");
         }
         if (attacker != target && attacker.IsEnemy(target)) {
             return OddsCalculator.ForWeapon(attacker, target);
         }
+        return null;
+    }
+
+    // Logs (once per distinct reason) why nothing is shown, so "no overlay" reports can be diagnosed from the log.
+    private static Prediction Hidden(string reason) {
+        LogOnce("Overlay hidden: " + reason);
         return null;
     }
 
