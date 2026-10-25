@@ -1,0 +1,12 @@
+{
+  "Id": "HitChanceOverlay",
+  "DisplayName": "Hit Chance Overlay",
+  "Author": "brett",
+  "Version": "0.1.0",
+  "ManagerVersion": "0.27.11",
+  "Requirements": [],
+  "AssemblyName": "HitChanceOverlay.dll",
+  "EntryMethod": "HitChanceOverlay.Main.Load",
+  "HomePage": "",
+  "Repository": ""
+}

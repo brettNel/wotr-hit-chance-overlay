@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<!-- Optional per-machine override: create GamePath.props next to the .sln with a <WrathInstallDir> property. -->
+	<Import Project="$(SolutionDir)GamePath.props" Condition="Exists('$(SolutionDir)GamePath.props')" />
+
+	<PropertyGroup>
+		<TargetFramework>net481</TargetFramework>
+		<AssemblyName>HitChanceOverlay</AssemblyName>
+		<RootNamespace>HitChanceOverlay</RootNamespace>
+		<Description>Hit Chance Overlay</Description>
+		<Version>0.1.0</Version>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<LangVersion>latest</LangVersion>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+		<WrathInstallDir Condition="'$(WrathInstallDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Pathfinder Second Adventure</WrathInstallDir>
+		<WrathManaged>$(WrathInstallDir)\Wrath_Data\Managed</WrathManaged>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<Reference Include="$(WrathManaged)\Unity*.dll" Private="false" />
+		<Reference Include="$(WrathManaged)\Core*.dll" Private="false" />
+		<Reference Include="$(WrathManaged)\Owlcat*.dll" Publicize="true" Private="false" />
+		<Reference Include="$(WrathManaged)\Assembly-CSharp.dll" Publicize="true" Private="false" />
+		<Reference Include="$(WrathManaged)\Newtonsoft.Json.dll" Private="false" />
+		<Reference Include="$(WrathManaged)\UniRx.dll" Private="false" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- Compile-time only: at runtime Unity Mod Manager supplies both of these. -->
+		<PackageReference Include="UnityModManager" Version="0.33.2" ExcludeAssets="runtime" PrivateAssets="all" />
+		<PackageReference Include="Lib.Harmony" Version="2.3.6" ExcludeAssets="runtime" PrivateAssets="all" />
+		<PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+		<PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.2" IncludeAssets="build; contentfiles" PrivateAssets="all" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<None Include="Info.json" CopyToOutputDirectory="PreserveNewest" />
+	</ItemGroup>
+
+	<!-- Copies the built mod into <game>\Mods\HitChanceOverlay so UMM picks it up on next launch. -->
+	<Target Name="Deploy" AfterTargets="Build" Condition="'$(SkipDeploy)' != 'true'">
+		<ItemGroup>
+			<ModFiles Include="$(TargetDir)HitChanceOverlay.dll;$(TargetDir)HitChanceOverlay.pdb;$(TargetDir)Info.json" />
+		</ItemGroup>
+		<Copy SourceFiles="@(ModFiles)" DestinationFolder="$(WrathInstallDir)\Mods\$(AssemblyName)" ContinueOnError="true" />
+	</Target>
+</Project>
