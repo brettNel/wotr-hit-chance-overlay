@@ -126,7 +126,7 @@ internal static class PendingToggles {
         return bonus;
     }
 
-    private static int BuffAttackBonus(UnitEntityData attacker, BlueprintBuff buff, MechanicsContext parent, ItemEntityWeapon weapon) {
+    internal static int BuffAttackBonus(UnitEntityData attacker, BlueprintBuff buff, MechanicsContext parent, ItemEntityWeapon weapon) {
         var context = parent.CloneFor(buff, attacker.Descriptor);
         context.Recalculate();
 
@@ -154,6 +154,10 @@ internal static class PendingToggles {
                     if (c.Type.IsSuitableWeapon(weapon.Blueprint) != c.AllTypesExcept) {
                         bonus += c.Value.Calculate(context) * c.AttackBonus;
                     }
+                    break;
+                // Armed by RuleAttackWithWeapon, then added in RuleCalculateAttackBonus (e.g. the charge +2). We preview a normal attack.
+                case AttackOfOpportunityAttackBonus c when c.NotAttackOfOpportunity:
+                    bonus += c.Bonus.Calculate(context);
                     break;
                 case WeaponParametersAttackBonus c:
                     bonus += WeaponParametersBonus(c, attacker, weapon, context);

@@ -26,6 +26,8 @@ internal sealed class EffectSummary {
     public int Buffs;
     public bool DependsOnUnknownCondition;
     public SavingThrowType NestedSave = SavingThrowType.Unknown;
+    public bool MeleeWeaponAttack;                 // the effect makes the caster attack the target with a weapon
+    public bool RangedWeaponAttack;
 
     public bool AnyHarm => OtherDamage || EnergyDamage.Count > 0 || Buffs > 0;
 }
@@ -100,6 +102,16 @@ internal static class EffectAnalyzer {
 
                 case ContextActionHealTarget:
                     summary.Heals = true;
+                    break;
+
+                case ContextActionMeleeAttack:
+                    summary.MeleeWeaponAttack = true;
+                    summary.OtherDamage = true;
+                    break;
+
+                case ContextActionRangedAttack ranged when !ranged.AutoHit:
+                    summary.RangedWeaponAttack = true;
+                    summary.OtherDamage = true;
                     break;
 
                 case ContextActionApplyBuff buff:

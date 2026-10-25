@@ -128,6 +128,28 @@ internal static class OddsCalculator {
             var attack = CalculateAttack(caster, target, GetWeaponEntity(attackWeapon), 0, weaponAttack: false);
             AddAttackLines(p, attack, attackWeapon.AttackType.IsTouch() ? "to hit (touch)" : "to hit");
             chances.Add(attack.FinalPercent);
+        } else {
+            // 1b. Abilities that are a weapon attack (Charge, Vital Strike, Cleave, ...): the chance that attack hits.
+            WeaponAbilities.Plan? plan = null;
+            try {
+                plan = WeaponAbilities.Detect(payload, caster, effects);
+            } catch (Exception e) {
+                Overlay.LogOnce($"Weapon ability detection failed for {payload.name}: {e}");
+            }
+            if (plan is { } weaponPlan) {
+                int chargeBonus = 0;
+                if (weaponPlan.Charge) {
+                    try {
+                        chargeBonus = WeaponAbilities.ChargeBonus(ability, caster, target, weaponPlan.Weapon);
+                    } catch (Exception e) {
+                        Overlay.LogOnce("Charge bonus preview failed: " + e);
+                    }
+                }
+                var attack = CalculateAttack(caster, target, weaponPlan.Weapon, weaponPlan.Penalty, weaponAttack: true,
+                    chargeBonus, chargeBonus != 0 ? $"Charge {FormatBonus(chargeBonus)}" : null);
+                AddAttackLines(p, attack, $"to hit ({weaponPlan.Weapon.Name})");
+                chances.Add(attack.FinalPercent);
+            }
         }
 
         var context = ability.CreateExecutionContext(new TargetWrapper(target), abilityParams);
@@ -180,7 +202,8 @@ internal static class OddsCalculator {
         public int FinalPercent => AutoHit ? 100 : (int)Math.Round(RollPercent * (100 - ConcealmentPercent) / 100.0 / (MirrorImages + 1));
     }
 
-    private static AttackOdds CalculateAttack(UnitEntityData attacker, UnitEntityData target, ItemEntityWeapon weapon, int penalty, bool weaponAttack) {
+    private static AttackOdds CalculateAttack(UnitEntityData attacker, UnitEntityData target, ItemEntityWeapon weapon, int penalty, bool weaponAttack,
+        int extraBonus = 0, string extraNote = null) {
         var attackType = weapon.Blueprint.AttackType;
 
         // Mirrors RuleAttackRoll.OnTrigger: attacking yourself, or touching a non-hostile, always hits.
@@ -190,12 +213,28 @@ internal static class OddsCalculator {
             return new AttackOdds(0, 0, 100, 0, 0, true, attackType.IsTouch());
         }
 
-        int ac = Rulebook.Trigger(new RuleCalculateAC(attacker, target, attackType)).Result;
-        var attackBonus = Rulebook.Trigger(new RuleCalculateAttackBonus(attacker, target, weapon, penalty));
+        // If walking up to the target will make it flanked, run the calculations with the game seeing that state, so the
+        // flanking bonus and every flanking-dependent feature (Outflank, Back to Back, ...) apply as they will in the attack.
+        HashSet<UnitEntityData> engagersOnArrival = null;
+        try {
+            engagersOnArrival = FlankingPredictor.PredictEngagers(attacker, target, weapon);
+        } catch (Exception e) {
+            Overlay.LogOnce("Flanking prediction failed: " + e);
+        }
+        bool flankedOnArrival = engagersOnArrival != null;
+        int ac;
+        RuleCalculateAttackBonus attackBonus;
+        using (flankedOnArrival ? FlankingPredictor.Simulate(target, engagersOnArrival) : null) {
+            ac = Rulebook.Trigger(new RuleCalculateAC(attacker, target, attackType)).Result;
+            attackBonus = Rulebook.Trigger(new RuleCalculateAttackBonus(attacker, target, weapon, penalty) { TargetIsFlanked = flankedOnArrival });
+        }
         int ab = attackBonus.Result;
 
         // Toggles like Fight Defensively only apply their buff once a weapon attack starts; add what they will add.
         var pending = weaponAttack ? PendingToggles.AttackBonus(attacker, target, weapon) : default;
+        if (extraBonus != 0) {
+            pending = new PendingToggles.Pending(pending.AttackBonus + extraBonus, pending.Names == null ? extraNote : pending.Names + ", " + extraNote);
+        }
         if (pending.AttackBonus != 0) {
             // Mirrors the end of RuleCalculateAttackBonus.OnTrigger: on easier difficulties a party member's attack bonus
             // can't drop below BAB - penalty - 2 (added as a Difficulty modifier). Redo that floor with the toggle included.
@@ -217,7 +256,8 @@ internal static class OddsCalculator {
         };
         // Mirrors the mirror image block in RuleAttackRoll.OnTrigger (UnitPartMirrorImage.TryAbsorbHit).
         int images = attacker.Descriptor.IsImmuneToVisualEffects ? 0 : target.Get<UnitPartMirrorImage>()?.MechanicsImages.Count ?? 0;
-        return new AttackOdds(ab, ac, rollPercent, concealment, images, false, attackType.IsTouch(), pending.Names);
+        string notes = flankedOnArrival ? (pending.Names == null ? "flanked on arrival" : pending.Names + ", flanked on arrival") : pending.Names;
+        return new AttackOdds(ab, ac, rollPercent, concealment, images, false, attackType.IsTouch(), notes);
     }
 
     private static void AddAttackLines(Prediction p, AttackOdds odds, string label) {
