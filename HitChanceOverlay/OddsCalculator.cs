@@ -12,6 +12,7 @@ using Kingmaker.UnitLogic;
 using Kingmaker.UnitLogic.Abilities;
 using Kingmaker.UnitLogic.Abilities.Blueprints;
 using Kingmaker.UnitLogic.Abilities.Components;
+using Kingmaker.UnitLogic.Abilities.Components.Base;
 using Kingmaker.UnitLogic.Mechanics;
 using Kingmaker.UnitLogic.Parts;
 using Kingmaker.Utility;
@@ -83,11 +84,16 @@ internal static class OddsCalculator {
             Overlay.LogOnce($"Context recalculation failed for {payload.name}: {e.Message}");
         }
 
-        // Mirrors RuleSpellResistanceCheck.OnTrigger: IsImmune(context) is what the game checks, and it's the only overload
-        // that sees the spell's descriptors (poison, mind-affecting, ...). The blueprint overloads catch spell-specific immunities.
+        // Mirrors AbilityExecutionProcess.DoApplyEffect + RuleSpellResistanceCheck: spell immunity (descriptors, golems, a
+        // swarm's immunity to single-target spells) is only checked when the ability applies an effect to the target, and a
+        // sticky-touch spell is checked as its touch delivery. Custom abilities (Charge, ...) never go through it.
         var spellResistancePart = target.Get<UnitPartSpellResistance>();
-        if (spellResistancePart != null && (spellResistancePart.IsImmune(context) || spellResistancePart.IsImmune(payload, caster)
-            || spellResistancePart.IsImmune(blueprint, caster))) {
+        bool checksImmunity = payload.GetComponent<AbilityApplyEffect>() != null;
+        bool immune = false;
+        if (spellResistancePart != null && checksImmunity) {
+            immune = IsSpellImmune(spellResistancePart, context, payload, blueprint);
+        }
+        if (immune) {
             p.Headline = new Line("IMMUNE", Tone.Immune);
             return p;
         }
@@ -131,7 +137,8 @@ internal static class OddsCalculator {
 
         // 1. Attack roll (touch / ray / attack-roll projectile)
         if (attackWeapon != null) {
-            var attack = CalculateAttack(caster, target, GetWeaponEntity(attackWeapon), 0, weaponAttack: false);
+            var approach = PendingToggles.SpellApproach(ability, target);
+            var attack = CalculateAttack(caster, target, GetWeaponEntity(attackWeapon), 0, weaponAttack: false, approach.AttackBonus, approach.Names);
             AddAttackLines(p, attack, attackWeapon.AttackType.IsTouch() ? "to hit (touch)" : "to hit");
             chances.Add(attack.FinalPercent);
         } else {
@@ -243,7 +250,9 @@ internal static class OddsCalculator {
                 ? new RuleAttackWithWeapon(attacker, target, weapon, penalty) { IsFirstAttack = firstAttack, IsCharge = charge }
                 : null;
             var weaponStats = attackWithWeapon?.WeaponStats ?? new RuleCalculateWeaponStats(attacker, weapon);
-            attackBonus = Rulebook.Trigger(new RuleCalculateAttackBonus(attacker, target, weaponStats, penalty) { TargetIsFlanked = flankedOnArrival });
+            using (ArmedAttackBonuses.Arm(attacker, attackWithWeapon, new RuleAttackRoll(attacker, target, weaponStats, penalty))) {
+                attackBonus = Rulebook.Trigger(new RuleCalculateAttackBonus(attacker, target, weaponStats, penalty) { TargetIsFlanked = flankedOnArrival });
+            }
             if (attackWithWeapon != null) {
                 // The weapon stats are calculated now, so build the hit's damage the way the attack will (CreateRuleDealDamage
                 // only constructs rules) and check whether the target would take any of it.
@@ -335,6 +344,24 @@ internal static class OddsCalculator {
             return false;
         }
         return !payload.IgnoreSpellResistanceForAlly || caster.Group.IsEnemy(target.Group);
+    }
+
+    // Mirrors UnitPartSpellResistance.IsImmune(context). For a sticky touch the game checks the touch delivery ability, so
+    // the delivery's own components decide (a touch gets past a swarm's single-target immunity) while the spell's
+    // descriptors still count (a wood golem shrugs off every spell except fire ones).
+    private static bool IsSpellImmune(UnitPartSpellResistance part, AbilityExecutionContext context, BlueprintAbility payload, BlueprintAbility blueprint) {
+        if (payload == blueprint) {
+            return part.IsImmune(context);
+        }
+        if (context.MaybeCaster == context.MainTarget) {
+            return false;
+        }
+        foreach (var immunity in part.m_SpellImmunities) {
+            if (part.CanApply(immunity, null, context.MaybeCaster, context.SpellDescriptor, payload)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static int GetSpellResistance(UnitPartSpellResistance part, MechanicsContext context, BlueprintAbility payload, UnitEntityData caster) {

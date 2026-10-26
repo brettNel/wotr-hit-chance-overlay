@@ -6,6 +6,8 @@ using Kingmaker.EntitySystem.Stats;
 using Kingmaker.Enums;
 using Kingmaker.Items;
 using Kingmaker.UnitLogic;
+using Kingmaker.UnitLogic.Abilities;
+using Kingmaker.Utility;
 using Kingmaker.UnitLogic.ActivatableAbilities;
 using Kingmaker.UnitLogic.Buffs.Blueprints;
 using Kingmaker.UnitLogic.FactLogic;
@@ -64,17 +66,44 @@ internal static class PendingToggles {
         if (!attacker.State.Features.PointBlankRange || !weapon.Blueprint.IsRanged || weapon.Blueprint.AttackRange.Value <= 30) {
             return;
         }
+        ApproachBonuses(attacker, target, 30.Feet().Meters + attacker.Corpulence + target.Corpulence, ref total, ref names);
+    }
+
+    /// <summary>
+    /// Spells with an attack roll (rays, ranged touch): if the target is beyond the spell's range (AbilityData.GetApproachDistance,
+    /// which the Point-Blank Shot toggle caps at 30 ft for attack-roll projectiles), the caster walks in first and
+    /// "within X ft" bonuses like Point-Blank Shot apply at the casting spot.
+    /// </summary>
+    public static Pending SpellApproach(AbilityData ability, UnitEntityData target) {
+        int total = 0;
+        List<string> names = null;
+        try {
+            var caster = ability.Caster.Unit;
+            ApproachBonuses(caster, target, ability.GetApproachDistance(target), ref total, ref names);
+        } catch (Exception e) {
+            Overlay.LogOnce("Could not preview spell approach: " + e);
+        }
+        return new Pending(total, names == null ? null : string.Join(", ", names));
+    }
+
+    // The attacker stops once within approachMeters; bonuses whose range covers that spot but not the current one will apply.
+    private static void ApproachBonuses(UnitEntityData attacker, UnitEntityData target, float approachMeters, ref int total, ref List<string> names) {
+        const float Tolerance = 0.3f;
         float distance = target.DistanceTo(attacker);
+        if (distance <= approachMeters) {
+            return; // no walking: the game's own rule already sees the real distance
+        }
         foreach (var fact in attacker.Facts.List) {
             if (!fact.Active) {
                 continue;
             }
             foreach (var component in fact.Components) {
-                if (!component.IsActive || component.SourceBlueprintComponent is not DistanceAttackBonus bonus || bonus.Range.Value < 30) {
+                if (!component.IsActive || component.SourceBlueprintComponent is not DistanceAttackBonus bonus) {
                     continue;
                 }
-                // Already applied by the game's own rule when we're within range now.
-                if (distance <= bonus.Range.Meters + target.Corpulence + attacker.Corpulence) {
+                float reach = bonus.Range.Meters + target.Corpulence + attacker.Corpulence;
+                // Already applied by the game's own rule when we're within range now; or still out of range after walking in.
+                if (distance <= reach || approachMeters > reach + Tolerance) {
                     continue;
                 }
                 total += bonus.AttackBonus;

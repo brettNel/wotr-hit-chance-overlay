@@ -125,7 +125,8 @@ internal static class EffectAnalyzer {
                     break;
 
                 case ContextActionApplyBuff buff:
-                    if (buff.ToCaster) {
+                    // A buff with no components is a marker (e.g. a hex's "already used on this target" cooldown), not harm.
+                    if (buff.ToCaster || (buff.Buff != null && buff.Buff.ComponentsArray.Length == 0)) {
                         summary.OtherEffects++;
                     } else if (buff.Buff != null) {
                         var parent = buff.IgnoreParentContext ? null : ContextData<MechanicsContext.Data>.Current?.Context;
