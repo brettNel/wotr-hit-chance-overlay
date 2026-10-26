@@ -49,6 +49,11 @@ internal static class OddsCalculator {
         var p = new Prediction { Title = $"{attacker.CharacterName}, {weapon.Name} vs {target.CharacterName}" };
         var first = CalculateAttack(attacker, target, weapon, 0, weaponAttack: true);
         AddAttackLines(p, first, "to hit");
+        if (first.DamageImmune) {
+            p.Headline = new Line("IMMUNE", Tone.Immune);
+            p.Add("Immune to weapon damage", Tone.Dim);
+            return p;
+        }
         p.SetPercent(first.FinalPercent);
         return p;
     }
@@ -87,9 +92,10 @@ internal static class OddsCalculator {
             return p;
         }
 
+        var attackWeapon = GetAbilityAttackWeapon(payload);
         EffectSummary effects = null;
         try {
-            effects = EffectAnalyzer.Analyze(context, payload, target);
+            effects = EffectAnalyzer.Analyze(context, payload, target, attackWeapon != null ? GetWeaponEntity(attackWeapon) : null);
         } catch (Exception e) {
             Overlay.LogOnce($"Effect analysis failed for {payload.name}: {e}");
         }
@@ -100,8 +106,8 @@ internal static class OddsCalculator {
                 p.Headline = new Line("HEAL", hostile ? Tone.Immune : Tone.Good);
                 return p;
             }
-            if (effects.ImmuneEnergy.Count > 0 || effects.ImmuneBuffs.Count > 0) {
-                string immuneTo = string.Join(", ", effects.ImmuneEnergy.Select(e => e + " damage").Concat(effects.ImmuneBuffs.Distinct()));
+            if (effects.ImmuneDamage.Count > 0 || effects.ImmuneBuffs.Count > 0) {
+                string immuneTo = string.Join(", ", effects.ImmuneDamage.Concat(effects.ImmuneBuffs.Distinct()));
                 // Every effect the spell has would be shrugged off, so hitting doesn't matter.
                 if (!effects.AnyHarm && !effects.Heals) {
                     p.Headline = new Line("IMMUNE", Tone.Immune);
@@ -124,7 +130,6 @@ internal static class OddsCalculator {
         var chances = new List<int>();
 
         // 1. Attack roll (touch / ray / attack-roll projectile)
-        var attackWeapon = GetAbilityAttackWeapon(payload);
         if (attackWeapon != null) {
             var attack = CalculateAttack(caster, target, GetWeaponEntity(attackWeapon), 0, weaponAttack: false);
             AddAttackLines(p, attack, attackWeapon.AttackType.IsTouch() ? "to hit (touch)" : "to hit");
@@ -149,6 +154,15 @@ internal static class OddsCalculator {
                 var attack = CalculateAttack(caster, target, weaponPlan.Weapon, weaponPlan.Penalty, weaponAttack: true,
                     chargeBonus, chargeBonus != 0 ? $"Charge {FormatBonus(chargeBonus)}" : null, charge: weaponPlan.Charge);
                 AddAttackLines(p, attack, $"to hit ({weaponPlan.Weapon.Name})");
+                if (attack.DamageImmune) {
+                    // The weapon hit does nothing; IMMUNE unless the ability also does something else to the target.
+                    if (effects == null || (!effects.HarmBesidesWeaponAttack && effects.ImmuneDamage.Count == 0 && effects.ImmuneBuffs.Count == 0)) {
+                        p.Headline = new Line("IMMUNE", Tone.Immune);
+                        p.Add("Immune to weapon damage", Tone.Dim);
+                        return p;
+                    }
+                    p.Add("Immune to weapon damage", Tone.Bad);
+                }
                 chances.Add(attack.FinalPercent);
             }
         }
@@ -192,7 +206,7 @@ internal static class OddsCalculator {
 
     // ---------- attack rolls ----------
 
-    internal readonly record struct AttackOdds(int AttackBonus, int TargetAC, int RollPercent, int ConcealmentPercent, int MirrorImages, bool AutoHit, bool TouchAC, string PendingToggles = null) {
+    internal readonly record struct AttackOdds(int AttackBonus, int TargetAC, int RollPercent, int ConcealmentPercent, int MirrorImages, bool AutoHit, bool TouchAC, string PendingToggles = null, bool DamageImmune = false) {
         // Concealment is rolled first, then the d20; a hit then strikes the real target with chance 1/(images+1).
         public int FinalPercent => AutoHit ? 100 : (int)Math.Round(RollPercent * (100 - ConcealmentPercent) / 100.0 / (MirrorImages + 1));
     }
@@ -219,15 +233,26 @@ internal static class OddsCalculator {
         bool flankedOnArrival = engagersOnArrival != null;
         int ac;
         RuleCalculateAttackBonus attackBonus;
+        bool damageImmune = false;
         using (flankedOnArrival ? FlankingPredictor.Simulate(target, engagersOnArrival) : null) {
             ac = Rulebook.Trigger(new RuleCalculateAC(attacker, target, attackType)).Result;
             // Weapon attacks: hand the weapon calculation a stand-in for the attack (never triggered), as RuleAttackWithWeapon
             // does. Enchantments that depend on the target (Bane, "+2 vs evil outsiders", ModifyWeaponStatsConditional) only
             // apply when RuleCalculateWeaponStats.AttackWithWeapon tells them who is being attacked.
-            var weaponStats = weaponAttack
-                ? new RuleAttackWithWeapon(attacker, target, weapon, penalty) { IsFirstAttack = firstAttack, IsCharge = charge }.WeaponStats
-                : new RuleCalculateWeaponStats(attacker, weapon);
+            var attackWithWeapon = weaponAttack
+                ? new RuleAttackWithWeapon(attacker, target, weapon, penalty) { IsFirstAttack = firstAttack, IsCharge = charge }
+                : null;
+            var weaponStats = attackWithWeapon?.WeaponStats ?? new RuleCalculateWeaponStats(attacker, weapon);
             attackBonus = Rulebook.Trigger(new RuleCalculateAttackBonus(attacker, target, weaponStats, penalty) { TargetIsFlanked = flankedOnArrival });
+            if (attackWithWeapon != null) {
+                // The weapon stats are calculated now, so build the hit's damage the way the attack will (CreateRuleDealDamage
+                // only constructs rules) and check whether the target would take any of it.
+                try {
+                    damageImmune = RulePreview.DamageImmunity(attackWithWeapon.CreateRuleDealDamage(enablePrecisionAndCritical: false), null);
+                } catch (Exception e) {
+                    Overlay.LogOnce("Weapon damage immunity preview failed: " + e);
+                }
+            }
         }
         int ab = attackBonus.Result;
 
@@ -258,7 +283,7 @@ internal static class OddsCalculator {
         // Mirrors the mirror image block in RuleAttackRoll.OnTrigger (UnitPartMirrorImage.TryAbsorbHit).
         int images = attacker.Descriptor.IsImmuneToVisualEffects ? 0 : target.Get<UnitPartMirrorImage>()?.MechanicsImages.Count ?? 0;
         string notes = flankedOnArrival ? (pending.Names == null ? "flanked on arrival" : pending.Names + ", flanked on arrival") : pending.Names;
-        return new AttackOdds(ab, ac, rollPercent, concealment, images, false, attackType.IsTouch(), notes);
+        return new AttackOdds(ab, ac, rollPercent, concealment, images, false, attackType.IsTouch(), notes, damageImmune);
     }
 
     private static void AddAttackLines(Prediction p, AttackOdds odds, string label) {

@@ -12,6 +12,9 @@ using Kingmaker.UnitLogic.Mechanics.Actions;
 using Kingmaker.UnitLogic.Parts;
 using Kingmaker.Utility;
 using Kingmaker.Blueprints;
+using Kingmaker.Items;
+using Kingmaker.RuleSystem;
+using Kingmaker.RuleSystem.Rules.Damage;
 
 namespace HitChanceOverlay;
 
@@ -22,7 +25,7 @@ internal sealed class EffectSummary {
     public bool Heals;
     public bool OtherDamage;                       // physical / untyped / ability damage / energy drain
     public readonly HashSet<DamageEnergyType> EnergyDamage = new();
-    public readonly HashSet<DamageEnergyType> ImmuneEnergy = new();
+    public readonly HashSet<string> ImmuneDamage = new(); // damage the target would take none of ("Fire damage", ...)
     public int Buffs;                              // buffs that would take effect
     public readonly List<string> ImmuneBuffs = new(); // buffs the target would shrug off (immunity)
     public bool DependsOnUnknownCondition;
@@ -31,11 +34,14 @@ internal sealed class EffectSummary {
     public bool RangedWeaponAttack;
 
     public int OtherEffects;                       // actions we don't model, but which do something
+    public ItemEntityWeapon AttackWeapon;          // the touch/ray "weapon" the spell is delivered with, if any
 
-    public bool AnyHarm => OtherDamage || EnergyDamage.Count > 0 || Buffs > 0;
+    public bool AnyHarm => HarmBesidesWeaponAttack || MeleeWeaponAttack || RangedWeaponAttack;
+
+    public bool HarmBesidesWeaponAttack => OtherDamage || EnergyDamage.Count > 0 || Buffs > 0;
 
     /// <summary>Nothing at all would happen to the target, not even something it's immune to.</summary>
-    public bool DoesNothing => !AnyHarm && !Heals && OtherEffects == 0 && ImmuneBuffs.Count == 0 && ImmuneEnergy.Count == 0;
+    public bool DoesNothing => !AnyHarm && !Heals && OtherEffects == 0 && ImmuneBuffs.Count == 0 && ImmuneDamage.Count == 0;
 }
 
 /// <summary>
@@ -47,12 +53,12 @@ internal static class EffectAnalyzer {
     private const int MaxDepth = 12;
     private static readonly Dictionary<Type, FieldInfo[]> s_ActionListFields = new();
 
-    public static EffectSummary Analyze(AbilityExecutionContext context, BlueprintAbility payload, UnitEntityData target) {
+    public static EffectSummary Analyze(AbilityExecutionContext context, BlueprintAbility payload, UnitEntityData target, ItemEntityWeapon attackWeapon) {
         var run = payload.GetComponent<AbilityEffectRunAction>();
         if (run?.Actions == null || !run.Actions.HasActions) {
             return null;
         }
-        var summary = new EffectSummary();
+        var summary = new EffectSummary { AttackWeapon = attackWeapon };
         var wrapper = new TargetWrapper(target);
         using (ContextData<MechanicsContext.Data>.Request().Setup(context, wrapper)) {
             Walk(run.Actions, summary, target, 0);
@@ -93,12 +99,13 @@ internal static class EffectAnalyzer {
                     break;
 
                 case ContextActionDealDamage damage:
-                    if (damage.IsSimpleDamage && damage.DamageType != null && damage.DamageType.IsEnergy) {
-                        var energy = damage.DamageType.Energy;
-                        if (target.Get<UnitPartDamageReduction>()?.IsImmune(energy) == true) {
-                            summary.ImmuneEnergy.Add(energy);
+                    if (damage.IsSimpleDamage && damage.DamageType != null) {
+                        if (IsImmuneToDamage(damage.DamageType, target, summary.AttackWeapon)) {
+                            summary.ImmuneDamage.Add(DamageLabel(damage.DamageType));
+                        } else if (damage.DamageType.IsEnergy) {
+                            summary.EnergyDamage.Add(damage.DamageType.Energy);
                         } else {
-                            summary.EnergyDamage.Add(energy);
+                            summary.OtherDamage = true;
                         }
                     } else {
                         summary.OtherDamage = true;
@@ -111,12 +118,10 @@ internal static class EffectAnalyzer {
 
                 case ContextActionMeleeAttack:
                     summary.MeleeWeaponAttack = true;
-                    summary.OtherDamage = true;
                     break;
 
                 case ContextActionRangedAttack ranged when !ranged.AutoHit:
                     summary.RangedWeaponAttack = true;
-                    summary.OtherDamage = true;
                     break;
 
                 case ContextActionApplyBuff buff:
@@ -160,6 +165,30 @@ internal static class EffectAnalyzer {
             }
         }
     }
+
+    // Builds the damage like ContextActionDealDamage.GetDamageRule (dice don't matter) and asks the game whether all of it
+    // would be declined. The delivery weapon matters: e.g. swarms only shrug off damage that comes with a weapon.
+    private static bool IsImmuneToDamage(DamageTypeDescription type, UnitEntityData target, ItemEntityWeapon attackWeapon) {
+        var context = ContextData<MechanicsContext.Data>.Current?.Context;
+        var caster = context?.MaybeCaster;
+        if (caster == null) {
+            return false;
+        }
+        try {
+            var bundle = new DamageBundle(type.CreateDamage(new DiceFormula(1, DiceType.D6), 0)) { Weapon = attackWeapon };
+            var dealDamage = new RuleDealDamage(caster, target, bundle) { SourceAbility = context.SourceAbility, Reason = context };
+            return RulePreview.DamageImmunity(dealDamage, context);
+        } catch (Exception e) {
+            Overlay.LogOnce($"Damage immunity check failed for {type}: {e}");
+            return false;
+        }
+    }
+
+    private static string DamageLabel(DamageTypeDescription type) => type.Type switch {
+        DamageType.Energy => $"{type.Energy} damage",
+        DamageType.Physical => "physical damage",
+        _ => $"{type.Type} damage",
+    };
 
     private static bool? TryCheck(ConditionsChecker checker) {
         if (checker == null || !checker.HasConditions) {

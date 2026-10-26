@@ -4,6 +4,7 @@ using Kingmaker.EntitySystem.Stats;
 using Kingmaker.PubSubSystem;
 using Kingmaker.RuleSystem;
 using Kingmaker.RuleSystem.Rules;
+using Kingmaker.RuleSystem.Rules.Damage;
 using Kingmaker.UnitLogic.Mechanics;
 using Kingmaker.UnitLogic.Parts;
 using Kingmaker.Utility;
@@ -54,6 +55,34 @@ internal static class RulePreview {
         return evt.Immunity && !evt.IgnoreImmunity;
     }
 
+    /// <summary>
+    /// Mirrors RuleDealDamage up to RuleCalculateDamage's immunity step: true when every part of the damage would be cut to 0
+    /// (swarms vs weapons, incorporeal vs mundane weapons, energy immunity, physical immunity, ...). Nothing is rolled.
+    /// </summary>
+    public static bool DamageImmunity(RuleDealDamage dealDamage, MechanicsContext context) {
+        if (!dealDamage.DamageBundle.Any()) {
+            return false;
+        }
+        // RulePrepareDamage handlers shape the damage first: ghost touch, "counts as magic" (Ki Strike, Magic Fang-style
+        // buffs), materials, alignments, extra damage dice from enchantments. Its OnTrigger only adds sneak attack dice.
+        var prepare = new RulePrepareDamage(dealDamage) { Reason = dealDamage.Reason };
+        RunAboutToTrigger(prepare, context, dealDamage.Target);
+        var evt = new RuleCalculateDamage(dealDamage) { Reason = dealDamage.Reason };
+        RunAboutToTrigger(evt, context, dealDamage.Target);
+        // Mirrors RuleCalculateDamage.OnTrigger / CalculateDamageValue: easier difficulties soften enemies' declines, and
+        // IgnoreImmunities resets them (except Absolute).
+        evt.ApplyDifficultyBeforeCalculated();
+        foreach (var damage in dealDamage.DamageBundle) {
+            if (damage.IgnoreImmunities) {
+                damage.ResetDecline();
+            }
+            if (!damage.Immune) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static SaveNumbers PreciseSavingThrow(MechanicsContext context, UnitEntityData target, SavingThrowType type, int dc) {
         var evt = new RuleSavingThrow(target, type, dc) { Reason = context };
         try {
@@ -87,6 +116,11 @@ internal static class RulePreview {
     }
 
     private static void RunAboutToTriggerNoCleanup(RulebookEvent evt, MechanicsContext context, UnitEntityData target) {
+        if (context == null) {
+            // Weapon attacks run outside any mechanics context.
+            RulebookEventBus.OnEventAboutToTrigger(evt);
+            return;
+        }
         using (ContextData<MechanicsContext.Data>.Request().Setup(context, new TargetWrapper(target))) {
             RulebookEventBus.OnEventAboutToTrigger(evt);
         }
