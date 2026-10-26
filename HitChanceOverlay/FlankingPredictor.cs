@@ -11,8 +11,8 @@ namespace HitChanceOverlay;
 /// <summary>
 /// Predicts whether the target will be flanked once the attacker has walked up to it.
 ///
-/// The game's flanking isn't positional. UnitCombatState.IsFlanked is simply "engaged by 2+ units" (turn-based), or
-/// "engaged by 2+ units whose current command targets it" (real-time). A unit engages an enemy that is within its
+/// The game's flanking isn't positional. In turn-based mode UnitCombatState.IsFlanked is simply "engaged by 2+ units".
+/// A unit engages an enemy that is within its
 /// melee threat range (UnitCombatEngagementController.TickUnit → UnitEngagementExtension.IsEngage). So when a melee
 /// attacker isn't engaging the target yet, we can predict the count after the approach: the current engagers, plus the
 /// attacker, plus the attacker's mount or rider. They share one position but engage separately, so a mounted
@@ -33,23 +33,16 @@ internal static class FlankingPredictor {
         if (!weapon.Blueprint.IsMelee || target.CombatState.IsFlanked || target.Descriptor.State.Features.CannotBeFlanked) {
             return null;
         }
-        bool turnBased = CombatController.IsInTurnBasedCombat();
-        if (turnBased && !target.IsInCombat) {
+        if (!target.IsInCombat) {
             return null; // mirrors IsFlanked: turn-based flanking needs the target in combat
         }
 
-        var engagers = new HashSet<UnitEntityData>();
-        foreach (var unit in target.CombatState.EngagedBy) {
-            if (turnBased || unit.Commands.AnyCommandTargets(target)) {
-                engagers.Add(unit);
-            }
-        }
-        engagers.Add(attacker);
+        var engagers = new HashSet<UnitEntityData>(target.CombatState.EngagedBy) { attacker };
 
         // Mount + rider: they stand on the same spot, so check whether the partner's own reach covers the target from where
         // the attacker will stand (no farther than the attacking weapon's reach, or where it already is if that's closer).
         var partner = attacker.GetSaddledUnit() ?? attacker.GetRider();
-        if (partner != null && !engagers.Contains(partner) && PartnerWillEngage(attacker, partner, target, weapon, turnBased)) {
+        if (partner != null && !engagers.Contains(partner) && PartnerWillEngage(attacker, partner, target, weapon)) {
             engagers.Add(partner);
         }
         return engagers.Count > 1 ? engagers : null;
@@ -88,8 +81,8 @@ internal static class FlankingPredictor {
         }
     }
 
-    // Real-time IsFlanked counts only engagers whose command targets the unit (and the attacker has no command yet), so
-    // force it while simulating. IsFlanked is a large getter, so it isn't inlined and the patch reliably applies.
+    // Force IsFlanked while simulating, so the result doesn't depend on IsFlanked's other checks staying as they are.
+    // IsFlanked is a large getter, so it isn't inlined and the patch reliably applies.
     [HarmonyPatch(typeof(UnitCombatState), nameof(UnitCombatState.IsFlanked), MethodType.Getter)]
     private static class UnitCombatState_IsFlanked_Patch {
         private static bool Prefix(UnitCombatState __instance, ref bool __result) {
@@ -101,12 +94,8 @@ internal static class FlankingPredictor {
         }
     }
 
-    private static bool PartnerWillEngage(UnitEntityData attacker, UnitEntityData partner, UnitEntityData target, ItemEntityWeapon weapon, bool turnBased) {
+    private static bool PartnerWillEngage(UnitEntityData attacker, UnitEntityData partner, UnitEntityData target, ItemEntityWeapon weapon) {
         if (partner.Descriptor.State.IsDead || !partner.Descriptor.State.CanAct || !partner.IsEnemy(target)) {
-            return false;
-        }
-        // Real-time only counts engagers that are attacking the target; the partner has to be doing so already.
-        if (!turnBased && !partner.Commands.AnyCommandTargets(target)) {
             return false;
         }
         var hand = partner.GetThreatHand();

@@ -43,7 +43,6 @@ public static class Main {
 
     private static void OnGUI(UnityModManager.ModEntry modEntry) {
         Settings.KeepAchievements = GUILayout.Toggle(Settings.KeepAchievements, " Keep achievements enabled while using mods (and don't mark saves as modded)");
-        Settings.ShowOutOfCombat = GUILayout.Toggle(Settings.ShowOutOfCombat, " Show outside of combat");
         Settings.ShowBreakdown = GUILayout.Toggle(Settings.ShowBreakdown, " Show details under the number (attack bonus vs AC, DC vs save, ...)");
         Settings.PreciseRules = GUILayout.Toggle(Settings.PreciseRules, " Precise saves & spell penetration (includes situational bonuses; turn off if you see odd behavior)");
         GUILayout.BeginHorizontal();
@@ -55,7 +54,6 @@ public static class Main {
 
 public class Settings : UnityModManager.ModSettings {
     public bool KeepAchievements = true;
-    public bool ShowOutOfCombat = false;
     public bool ShowBreakdown = false;
     public bool PreciseRules = true;
     public int FontSize = 20;

@@ -11,7 +11,7 @@ act. Select an attack or spell, hover over a creature, and a number appears next
 
 The odds come from the game's own rules, so feats, enchantments, buffs, flanking, spell resistance and saves are all
 included. For spells it's the chance that everything goes your way: hit, beat spell resistance, and the target fails
-its save. Works in real-time and turn-based mode, and achievements stay enabled.
+its save. Built for turn-based mode, and achievements stay enabled.
 
 ## Installing
 

@@ -42,29 +42,21 @@ internal class Overlay : MonoBehaviour {
         if (!Main.Enabled) {
             return null;
         }
+        // Turn-based combat only: outside it, nothing is read or simulated.
         var game = Game.Instance;
-        if (game?.Player == null) {
+        if (game?.Player == null || !CombatController.IsInTurnBasedCombat()) {
             return null;
         }
-        var target = HoverTracker.HoveredUnit;
+        // The turn controller tracks the hovered unit itself (it doesn't go through CursorController while an ability is selected).
+        var turn = game.TurnBasedCombatController?.CurrentTurn;
+        var target = turn?.m_HighlightedUnit;
         if (target == null || !target.IsInGame || target.Descriptor.State.IsDead) {
             return null;
         }
 
-        UnitEntityData attacker;
-        AbilityData ability;
-        if (CombatController.IsInTurnBasedCombat()) {
-            var turn = game.TurnBasedCombatController?.CurrentTurn;
-            attacker = turn?.SelectedUnit;
-            ability = turn?.CurrentAbility;
-        } else {
-            ability = game.SelectedAbilityHandler?.SelectedAbility;
-            attacker = ability?.Caster?.Unit ?? game.SelectionCharacter?.FirstSelectedUnit;
-        }
+        UnitEntityData attacker = turn.SelectedUnit;
+        AbilityData ability = turn.CurrentAbility;
         string what = ability?.Blueprint.name ?? "weapon";
-        if (!Main.Settings.ShowOutOfCombat && !game.Player.IsInCombat) {
-            return Hidden($"{what}: not in combat (tick \"Show outside of combat\" to change)");
-        }
         // During an enemy's turn SelectedUnit is that enemy; we only care about units the player controls.
         if (attacker == null) {
             return Hidden($"{what}: no attacker found");
@@ -72,16 +64,14 @@ internal class Overlay : MonoBehaviour {
         if (!attacker.IsDirectlyControllable) {
             return Hidden($"{what}: {attacker.CharacterName} is not directly controllable");
         }
-        // Turn-based: hide when clicking wouldn't attack/cast this turn. Same checks the game uses for the cursor
+        // Hide when clicking wouldn't attack/cast this turn. Same checks the game uses for the cursor
         // (CursorController.SetUnitTBMCursor): out of range, or a weapon click that would only move.
-        if (CombatController.IsInTurnBasedCombat()) {
-            var actionState = attacker.CombatState.TBM.ActionState;
-            if (actionState.IsOutOfRange) {
-                return Hidden($"{what}: target out of range this turn");
-            }
-            if (ability == null && actionState.IsMove() && !actionState.IsAttack()) {
-                return Hidden($"{what}: clicking would only move");
-            }
+        var actionState = attacker.CombatState.TBM.ActionState;
+        if (actionState.IsOutOfRange) {
+            return Hidden($"{what}: target out of range this turn");
+        }
+        if (ability == null && actionState.IsMove() && !actionState.IsAttack()) {
+            return Hidden($"{what}: clicking would only move");
         }
 
         if (ability != null) {
