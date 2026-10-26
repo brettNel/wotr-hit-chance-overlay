@@ -32,6 +32,10 @@ internal class Overlay : MonoBehaviour {
         m_NextRecalculate = Time.unscaledTime + RecalculateInterval;
         try {
             m_Prediction = Compute();
+            // The breakdown goes to the log only (once per distinct result), for checking odds against the combat log.
+            if (m_Prediction?.Headline.Text != null) {
+                LogOnce($"Odds: {m_Prediction.Title} -> {m_Prediction.Headline.Text} | {string.Join("; ", m_Prediction.Lines.Select(l => l.Text.Trim()))}");
+            }
         } catch (Exception e) {
             m_Prediction = null;
             LogOnce("Error computing odds: " + e);
@@ -97,17 +101,7 @@ internal class Overlay : MonoBehaviour {
         }
         EnsureStyle();
 
-        var text = new System.Text.StringBuilder();
-        text.Append("<b>").Append(Colorize(prediction.Headline)).Append("</b>");
-        if (Main.Settings.ShowBreakdown) {
-            text.Append("\n<size=").Append(Math.Max(10, m_StyleFontSize * 2 / 3)).Append('>');
-            text.Append(prediction.Title);
-            foreach (var line in prediction.Lines) {
-                text.Append('\n').Append(Colorize(line));
-            }
-            text.Append("</size>");
-        }
-        var content = new GUIContent(text.ToString());
+        var content = new GUIContent($"<b>{Colorize(prediction.Headline)}</b>");
         Vector2 size = m_Style.CalcSize(content);
 
         // Mouse position is bottom-left origin; IMGUI is top-left.

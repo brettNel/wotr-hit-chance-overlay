@@ -43,8 +43,6 @@ public static class Main {
 
     private static void OnGUI(UnityModManager.ModEntry modEntry) {
         Settings.KeepAchievements = GUILayout.Toggle(Settings.KeepAchievements, " Keep achievements enabled while using mods (and don't mark saves as modded)");
-        Settings.ShowBreakdown = GUILayout.Toggle(Settings.ShowBreakdown, " Show details under the number (attack bonus vs AC, DC vs save, ...)");
-        Settings.PreciseRules = GUILayout.Toggle(Settings.PreciseRules, " Precise saves & spell penetration (includes situational bonuses; turn off if you see odd behavior)");
         GUILayout.BeginHorizontal();
         GUILayout.Label($"Font size: {Settings.FontSize}", GUILayout.Width(120));
         Settings.FontSize = (int)GUILayout.HorizontalSlider(Settings.FontSize, 10, 32, GUILayout.Width(200));
@@ -54,8 +52,6 @@ public static class Main {
 
 public class Settings : UnityModManager.ModSettings {
     public bool KeepAchievements = true;
-    public bool ShowBreakdown = false;
-    public bool PreciseRules = true;
     public int FontSize = 20;
 
     public override void Save(UnityModManager.ModEntry modEntry) => Save(this, modEntry);

@@ -25,12 +25,10 @@ internal static class RulePreview {
     internal readonly record struct SpellResistanceNumbers(int Penetration, bool Precise);
 
     public static SaveNumbers SavingThrow(MechanicsContext context, UnitEntityData target, SavingThrowType type, int dc) {
-        if (Main.Settings.PreciseRules) {
-            try {
-                return PreciseSavingThrow(context, target, type, dc);
-            } catch (Exception e) {
-                Overlay.LogOnce("Precise saving throw preview failed, using plain stat: " + e);
-            }
+        try {
+            return PreciseSavingThrow(context, target, type, dc);
+        } catch (Exception e) {
+            Overlay.LogOnce("Precise saving throw preview failed, using plain stat: " + e);
         }
         var stat = target.Stats.GetStat(RuleSavingThrow.GetStatFromSavingThrow(type));
         return new SaveNumbers(stat?.ModifiedValue ?? 0, dc, false, 0, false);
@@ -38,15 +36,13 @@ internal static class RulePreview {
 
     public static SpellResistanceNumbers SpellPenetration(MechanicsContext context, UnitEntityData target) {
         int casterLevel = context.Params.CasterLevel;
-        if (Main.Settings.PreciseRules) {
-            try {
-                var evt = new RuleSpellResistanceCheck(context, target) { Reason = context };
-                RunAboutToTrigger(evt, context, target);
-                int extra = evt.m_AdditionalSpellPenetration != null ? (int)evt.m_AdditionalSpellPenetration : 0;
-                return new SpellResistanceNumbers(casterLevel + extra, true);
-            } catch (Exception e) {
-                Overlay.LogOnce("Precise spell resistance preview failed, using caster level: " + e);
-            }
+        try {
+            var evt = new RuleSpellResistanceCheck(context, target) { Reason = context };
+            RunAboutToTrigger(evt, context, target);
+            int extra = evt.m_AdditionalSpellPenetration != null ? (int)evt.m_AdditionalSpellPenetration : 0;
+            return new SpellResistanceNumbers(casterLevel + extra, true);
+        } catch (Exception e) {
+            Overlay.LogOnce("Precise spell resistance preview failed, using caster level: " + e);
         }
         return new SpellResistanceNumbers(casterLevel, false);
     }

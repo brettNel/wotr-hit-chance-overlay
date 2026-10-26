@@ -26,7 +26,7 @@ internal sealed class Prediction {
     public string Title;
     /// <summary>The one thing the overlay shows: a hit percentage, "IMMUNE" or "HEAL".</summary>
     public Line Headline;
-    /// <summary>Optional details, only drawn when "Show details" is on.</summary>
+    /// <summary>The breakdown behind the headline. Not drawn; written to the log for checking against the combat log.</summary>
     public readonly List<Line> Lines = new();
     public void SetPercent(int percent) => Headline = new Line($"{percent}%", OddsCalculator.ToneFor(percent));
     public void Add(string text, Tone tone = Tone.Normal) => Lines.Add(new Line(text, tone));
@@ -46,28 +46,10 @@ internal static class OddsCalculator {
         if (weapon == null) {
             return null;
         }
-        var p = new Prediction { Title = weapon.Name };
+        var p = new Prediction { Title = $"{attacker.CharacterName}, {weapon.Name} vs {target.CharacterName}" };
         var first = CalculateAttack(attacker, target, weapon, 0, weaponAttack: true);
         AddAttackLines(p, first, "to hit");
         p.SetPercent(first.FinalPercent);
-
-        // Iterative attacks (main hand only, from BAB). Shown as a compact row.
-        int bab = attacker.Stats.BaseAttackBonus.ModifiedValue;
-        int iteratives = bab >= 16 ? 4 : bab >= 11 ? 3 : bab >= 6 ? 2 : 1;
-        if (iteratives > 1 && !first.AutoHit) {
-            var parts = new List<string>();
-            for (int i = 0; i < iteratives; i++) {
-                parts.Add($"{CalculateAttack(attacker, target, weapon, 5 * i, weaponAttack: true, firstAttack: i == 0).FinalPercent}%");
-            }
-            p.Add("Full attack: " + string.Join(" / ", parts), Tone.Dim);
-        }
-
-        // Off-hand weapon (two-weapon fighting penalties are applied by the game's own attack bonus rule).
-        var offHand = attacker.Body.SecondaryHand;
-        if (offHand.MaybeShield == null && offHand.MaybeWeapon is { } offWeapon && offWeapon != weapon) {
-            var odds = CalculateAttack(attacker, target, offWeapon, 0, weaponAttack: true);
-            p.Add($"Off-hand ({offWeapon.Name}): {odds.FinalPercent}%", ToneFor(odds.FinalPercent));
-        }
         return p;
     }
 
@@ -80,7 +62,7 @@ internal static class OddsCalculator {
         // keep their real payload on a separate "delivery" ability.
         var blueprint = ability.GetDeliverBlueprint();
         var payload = blueprint.GetComponent<AbilityEffectStickyTouch>()?.TouchDeliveryAbility ?? blueprint;
-        var p = new Prediction { Title = ability.Name };
+        var p = new Prediction { Title = $"{caster.CharacterName}, {ability.Name} vs {target.CharacterName}" };
 
         if (!ability.CanTarget(new TargetWrapper(target))) {
             return null;
@@ -134,7 +116,7 @@ internal static class OddsCalculator {
                 p.Add("No effect on this target", Tone.Dim);
                 return p;
             }
-            if (effects.DependsOnUnknownCondition && Main.Settings.ShowBreakdown) {
+            if (effects.DependsOnUnknownCondition) {
                 p.Add("   (some effects depend on conditions we couldn't check)", Tone.Dim);
             }
         }
@@ -179,10 +161,8 @@ internal static class OddsCalculator {
                 // Mirrors RuleSpellResistanceCheck.IsSpellResisted: resisted when SR > penetration + d20 (no auto 1/20).
                 int chance = D20Percent(d => penetration.Penetration + d >= sr);
                 p.Add($"{chance}% to beat SR", ToneFor(chance));
-                if (Main.Settings.ShowBreakdown) {
-                    string note = penetration.Precise ? "" : " (spell penetration feats not included)";
-                    p.Add($"   {FormatBonus(penetration.Penetration)} vs SR {sr}{note}", Tone.Dim);
-                }
+                string note = penetration.Precise ? "" : " (spell penetration feats not included)";
+                p.Add($"   {FormatBonus(penetration.Penetration)} vs SR {sr}{note}", Tone.Dim);
                 chances.Add(chance);
             }
         }
@@ -199,10 +179,8 @@ internal static class OddsCalculator {
                 : D20Percent(d => d == 20 || (d > 1 && d + save.Bonus + save.SuccessBonus >= save.DC));
             int failPercent = 100 - passPercent;
             p.Add($"{failPercent}% to fail {saveType} save", ToneFor(failPercent));
-            if (Main.Settings.ShowBreakdown) {
-                string note = save.Precise ? "" : " (situational bonuses not included)";
-                p.Add($"   DC {save.DC} vs {saveType} {FormatBonus(save.Bonus)}{note}", Tone.Dim);
-            }
+            string note = save.Precise ? "" : " (situational bonuses not included)";
+            p.Add($"   DC {save.DC} vs {saveType} {FormatBonus(save.Bonus)}{note}", Tone.Dim);
             chances.Add(failPercent);
         }
 
@@ -285,9 +263,6 @@ internal static class OddsCalculator {
 
     private static void AddAttackLines(Prediction p, AttackOdds odds, string label) {
         p.Add($"{odds.FinalPercent}% {label}", ToneFor(odds.FinalPercent));
-        if (!Main.Settings.ShowBreakdown) {
-            return;
-        }
         if (odds.AutoHit) {
             p.Add("   automatic hit", Tone.Dim);
             return;
