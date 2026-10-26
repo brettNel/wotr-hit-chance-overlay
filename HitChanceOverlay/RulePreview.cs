@@ -51,6 +51,13 @@ internal static class RulePreview {
         return new SpellResistanceNumbers(casterLevel, false);
     }
 
+    /// <summary>Mirrors the immunity part of RuleCanApplyBuff (BuffDescriptorImmunity, SpecificBuffImmunity, ...).</summary>
+    public static bool BuffImmunity(MechanicsContext buffContext, UnitEntityData target, Kingmaker.UnitLogic.Buffs.Blueprints.BlueprintBuff buff) {
+        var evt = new RuleCanApplyBuff(target, buff, buffContext, null) { Reason = buffContext };
+        RunAboutToTrigger(evt, buffContext, target);
+        return evt.Immunity && !evt.IgnoreImmunity;
+    }
+
     private static SaveNumbers PreciseSavingThrow(MechanicsContext context, UnitEntityData target, SavingThrowType type, int dc) {
         var evt = new RuleSavingThrow(target, type, dc) { Reason = context };
         try {

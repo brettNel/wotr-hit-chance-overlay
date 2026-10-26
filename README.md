@@ -9,7 +9,7 @@ next to the cursor:
 | **`85%`** | Above 70% (green) |
 | **`45%`** | 20–70% (yellow) |
 | **`10%`** | Below 20% (red) |
-| **`IMMUNE`** | The target is immune to the spell, or to all of its damage (Fireball on a fire elemental, mind-affecting on a golem) |
+| **`IMMUNE`** | The target is immune to the spell, or to everything it does: its damage and its effects (Fireball on a fire elemental, mind-affecting on a golem, Blindness on a creature immune to blinding) |
 | **`HEAL`** | It would heal the target: red on an enemy (Inflict Wounds on undead), green on a friend |
 
 The percentage is the chance that it works, worked out with **the game's own rules**:
@@ -52,7 +52,6 @@ your save as modded permanently. This mod prevents both, the same way ToyBox doe
 - Fortification and Blind-Fight rerolls aren't modelled.
 - Weapon attacks show the first attack only; extra attacks from Haste, flurry or natural weapons aren't listed separately.
 - Damage reduction / physical immunity (incorporeal, DR/cold iron) isn't checked for weapon attacks.
-- Immunity to a spell's *condition* (immune to paralysis, but not to the spell) isn't detected; spell immunity and energy immunity are.
 - Area spells show the odds for the creature under the cursor only.
 
 ## Building from source

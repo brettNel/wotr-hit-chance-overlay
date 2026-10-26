@@ -86,15 +86,28 @@ internal static class OddsCalculator {
             return null;
         }
 
+        var abilityParams = ability.CalculateParams();
+        var context = ability.CreateExecutionContext(new TargetWrapper(target), abilityParams);
+        try {
+            // Mirrors AbilityExecutionProcess.PrepareCast: ranks and shared values (e.g. Sleep's "4 HD") are filled in
+            // before the spell's actions and conditions run. Only touches this throwaway context.
+            context.Recalculate();
+        } catch (Exception e) {
+            Overlay.LogOnce($"Context recalculation failed for {payload.name}: {e.Message}");
+        }
+
+        // Mirrors RuleSpellResistanceCheck.OnTrigger: IsImmune(context) is what the game checks, and it's the only overload
+        // that sees the spell's descriptors (poison, mind-affecting, ...). The blueprint overloads catch spell-specific immunities.
         var spellResistancePart = target.Get<UnitPartSpellResistance>();
-        if (spellResistancePart != null && (spellResistancePart.IsImmune(payload, caster) || spellResistancePart.IsImmune(blueprint, caster))) {
+        if (spellResistancePart != null && (spellResistancePart.IsImmune(context) || spellResistancePart.IsImmune(payload, caster)
+            || spellResistancePart.IsImmune(blueprint, caster))) {
             p.Headline = new Line("IMMUNE", Tone.Immune);
             return p;
         }
 
         EffectSummary effects = null;
         try {
-            effects = EffectAnalyzer.Analyze(ability, payload, target);
+            effects = EffectAnalyzer.Analyze(context, payload, target);
         } catch (Exception e) {
             Overlay.LogOnce($"Effect analysis failed for {payload.name}: {e}");
         }
@@ -105,21 +118,27 @@ internal static class OddsCalculator {
                 p.Headline = new Line("HEAL", hostile ? Tone.Immune : Tone.Good);
                 return p;
             }
-            if (effects.ImmuneEnergy.Count > 0) {
-                string energies = string.Join(", ", effects.ImmuneEnergy);
+            if (effects.ImmuneEnergy.Count > 0 || effects.ImmuneBuffs.Count > 0) {
+                string immuneTo = string.Join(", ", effects.ImmuneEnergy.Select(e => e + " damage").Concat(effects.ImmuneBuffs.Distinct()));
+                // Every effect the spell has would be shrugged off, so hitting doesn't matter.
                 if (!effects.AnyHarm && !effects.Heals) {
                     p.Headline = new Line("IMMUNE", Tone.Immune);
-                    p.Add($"Immune to {energies}", Tone.Dim);
+                    p.Add($"Immune to {immuneTo}", Tone.Dim);
                     return p;
                 }
-                p.Add($"Immune to {energies} damage", Tone.Bad);
+                p.Add($"Immune to {immuneTo}", Tone.Bad);
+            }
+            // The spell's own conditions say nothing happens to this target (Sleep on a creature above its HD limit).
+            if (effects.DoesNothing && !effects.DependsOnUnknownCondition) {
+                p.Headline = new Line("IMMUNE", Tone.Immune);
+                p.Add("No effect on this target", Tone.Dim);
+                return p;
             }
             if (effects.DependsOnUnknownCondition && Main.Settings.ShowBreakdown) {
                 p.Add("   (some effects depend on conditions we couldn't check)", Tone.Dim);
             }
         }
 
-        var abilityParams = ability.CalculateParams();
         var chances = new List<int>();
 
         // 1. Attack roll (touch / ray / attack-roll projectile)
@@ -151,8 +170,6 @@ internal static class OddsCalculator {
                 chances.Add(attack.FinalPercent);
             }
         }
-
-        var context = ability.CreateExecutionContext(new TargetWrapper(target), abilityParams);
 
         // 2. Spell resistance
         if (UsesSpellResistance(payload, caster, target) && spellResistancePart != null) {

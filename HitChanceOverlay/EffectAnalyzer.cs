@@ -23,13 +23,19 @@ internal sealed class EffectSummary {
     public bool OtherDamage;                       // physical / untyped / ability damage / energy drain
     public readonly HashSet<DamageEnergyType> EnergyDamage = new();
     public readonly HashSet<DamageEnergyType> ImmuneEnergy = new();
-    public int Buffs;
+    public int Buffs;                              // buffs that would take effect
+    public readonly List<string> ImmuneBuffs = new(); // buffs the target would shrug off (immunity)
     public bool DependsOnUnknownCondition;
     public SavingThrowType NestedSave = SavingThrowType.Unknown;
     public bool MeleeWeaponAttack;                 // the effect makes the caster attack the target with a weapon
     public bool RangedWeaponAttack;
 
+    public int OtherEffects;                       // actions we don't model, but which do something
+
     public bool AnyHarm => OtherDamage || EnergyDamage.Count > 0 || Buffs > 0;
+
+    /// <summary>Nothing at all would happen to the target, not even something it's immune to.</summary>
+    public bool DoesNothing => !AnyHarm && !Heals && OtherEffects == 0 && ImmuneBuffs.Count == 0 && ImmuneEnergy.Count == 0;
 }
 
 /// <summary>
@@ -41,14 +47,13 @@ internal static class EffectAnalyzer {
     private const int MaxDepth = 12;
     private static readonly Dictionary<Type, FieldInfo[]> s_ActionListFields = new();
 
-    public static EffectSummary Analyze(AbilityData ability, BlueprintAbility payload, UnitEntityData target) {
+    public static EffectSummary Analyze(AbilityExecutionContext context, BlueprintAbility payload, UnitEntityData target) {
         var run = payload.GetComponent<AbilityEffectRunAction>();
         if (run?.Actions == null || !run.Actions.HasActions) {
             return null;
         }
         var summary = new EffectSummary();
         var wrapper = new TargetWrapper(target);
-        var context = ability.CreateExecutionContext(wrapper, ability.CalculateParams());
         using (ContextData<MechanicsContext.Data>.Request().Setup(context, wrapper)) {
             Walk(run.Actions, summary, target, 0);
         }
@@ -115,8 +120,22 @@ internal static class EffectAnalyzer {
                     break;
 
                 case ContextActionApplyBuff buff:
-                    if (!buff.ToCaster) {
-                        summary.Buffs++;
+                    if (buff.ToCaster) {
+                        summary.OtherEffects++;
+                    } else if (buff.Buff != null) {
+                        var parent = buff.IgnoreParentContext ? null : ContextData<MechanicsContext.Data>.Current?.Context;
+                        bool immune;
+                        try {
+                            immune = BuffImmunity.IsImmune(target, buff.Buff, parent);
+                        } catch (Exception e) {
+                            Overlay.LogOnce($"Buff immunity check failed for {buff.Buff.name}: {e}");
+                            immune = false;
+                        }
+                        if (immune) {
+                            summary.ImmuneBuffs.Add(string.IsNullOrEmpty(buff.Buff.Name) ? buff.Buff.name : buff.Buff.Name);
+                        } else {
+                            summary.Buffs++;
+                        }
                     }
                     break;
 
@@ -124,10 +143,17 @@ internal static class EffectAnalyzer {
                     // Unknown action types: follow any nested action lists (randomizers, "on targets around", ...),
                     // except ones that obviously act on the caster or cast a different spell.
                     var typeName = action.GetType().Name;
-                    if (typeName.Contains("Caster") || typeName.Contains("CastSpell")) {
+                    if (typeName.Contains("Caster")) {
+                        summary.OtherEffects++; // acts on the caster: not harm, but the ability still does something
                         break;
                     }
-                    foreach (var field in GetActionListFields(action.GetType())) {
+                    var fields = GetActionListFields(action.GetType());
+                    // A plain action we don't model (knockdown, dispel, casting another spell, ...): it still does something.
+                    if (fields.Length == 0 || typeName.Contains("CastSpell")) {
+                        summary.OtherEffects++;
+                        break;
+                    }
+                    foreach (var field in fields) {
                         Walk(field.GetValue(action) as ActionList, summary, target, depth + 1);
                     }
                     break;
