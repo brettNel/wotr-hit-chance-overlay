@@ -10,7 +10,7 @@ namespace HitChanceOverlay;
 /// Some attack bonuses are "armed" when the attack starts: the component remembers the bonus and the target in
 /// OnEventAboutToTrigger(RuleAttackWithWeapon / RuleAttackRoll), adds it in RuleCalculateAttackBonus, and forgets it in
 /// OnEventDidTrigger. Examples: Shortbow of Code (+1 vs evil), bonuses against creatures with a fact, favored enemy shared
-/// with a pet. Previewing RuleCalculateAttackBonus alone misses them, so we arm just these components with stand-in rules
+/// with a pet, the charge effect's +2. Previewing RuleCalculateAttackBonus alone misses them, so we arm just these components with stand-in rules
 /// (never triggered) and disarm them afterwards. Other handlers of those rules are not called: some have real side effects.
 /// </summary>
 internal static class ArmedAttackBonuses {
@@ -19,6 +19,8 @@ internal static class ArmedAttackBonuses {
         typeof(AttackBonusAgainstFactOwner),
         typeof(AttackBonusConditional),
         typeof(ShareFavoredEnemies),
+        // The charge effect's +2 on non-AoO attacks (and AoO-only bonuses, which our non-AoO stand-in never arms).
+        typeof(AttackOfOpportunityAttackBonus),
     };
 
     public static IDisposable Arm(UnitEntityData attacker, RuleAttackWithWeapon attackWithWeapon, RuleAttackRoll attackRoll) {

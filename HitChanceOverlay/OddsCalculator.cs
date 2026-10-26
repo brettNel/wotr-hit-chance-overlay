@@ -138,7 +138,7 @@ internal static class OddsCalculator {
         // 1. Attack roll (touch / ray / attack-roll projectile)
         if (attackWeapon != null) {
             var approach = PendingToggles.SpellApproach(ability, target);
-            var attack = CalculateAttack(caster, target, GetWeaponEntity(attackWeapon), 0, weaponAttack: false, approach.AttackBonus, approach.Names);
+            var attack = CalculateAttack(caster, target, GetWeaponEntity(attackWeapon), 0, weaponAttack: false, approach.AttackBonus, approach.Names, spellContext: context);
             AddAttackLines(p, attack, attackWeapon.AttackType.IsTouch() ? "to hit (touch)" : "to hit");
             chances.Add(attack.FinalPercent);
         } else {
@@ -219,7 +219,7 @@ internal static class OddsCalculator {
     }
 
     private static AttackOdds CalculateAttack(UnitEntityData attacker, UnitEntityData target, ItemEntityWeapon weapon, int penalty, bool weaponAttack,
-        int extraBonus = 0, string extraNote = null, bool firstAttack = true, bool charge = false) {
+        int extraBonus = 0, string extraNote = null, bool firstAttack = true, bool charge = false, MechanicsContext spellContext = null) {
         var attackType = weapon.Blueprint.AttackType;
 
         // Mirrors RuleAttackRoll.OnTrigger: attacking yourself, or touching a non-hostile, always hits.
@@ -242,16 +242,19 @@ internal static class OddsCalculator {
         RuleCalculateAttackBonus attackBonus;
         bool damageImmune = false;
         using (flankedOnArrival ? FlankingPredictor.Simulate(target, engagersOnArrival) : null) {
-            ac = Rulebook.Trigger(new RuleCalculateAC(attacker, target, attackType)).Result;
             // Weapon attacks: hand the weapon calculation a stand-in for the attack (never triggered), as RuleAttackWithWeapon
             // does. Enchantments that depend on the target (Bane, "+2 vs evil outsiders", ModifyWeaponStatsConditional) only
             // apply when RuleCalculateWeaponStats.AttackWithWeapon tells them who is being attacked.
             var attackWithWeapon = weaponAttack
                 ? new RuleAttackWithWeapon(attacker, target, weapon, penalty) { IsFirstAttack = firstAttack, IsCharge = charge }
                 : null;
+            // In the game these rules inherit the attack's reason, which names the weapon (or the spell's context). Handlers
+            // read it: brilliant energy only ignores armor when Reason.Item is its weapon.
+            RuleReason reason = attackWithWeapon != null ? attackWithWeapon : spellContext;
+            ac = Rulebook.Trigger(new RuleCalculateAC(attacker, target, attackType) { Reason = reason }).Result;
             var weaponStats = attackWithWeapon?.WeaponStats ?? new RuleCalculateWeaponStats(attacker, weapon);
             using (ArmedAttackBonuses.Arm(attacker, attackWithWeapon, new RuleAttackRoll(attacker, target, weaponStats, penalty))) {
-                attackBonus = Rulebook.Trigger(new RuleCalculateAttackBonus(attacker, target, weaponStats, penalty) { TargetIsFlanked = flankedOnArrival });
+                attackBonus = Rulebook.Trigger(new RuleCalculateAttackBonus(attacker, target, weaponStats, penalty) { TargetIsFlanked = flankedOnArrival, Reason = reason });
             }
             if (attackWithWeapon != null) {
                 // The weapon stats are calculated now, so build the hit's damage the way the attack will (CreateRuleDealDamage
