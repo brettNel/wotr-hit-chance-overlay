@@ -57,7 +57,7 @@ internal static class OddsCalculator {
         if (iteratives > 1 && !first.AutoHit) {
             var parts = new List<string>();
             for (int i = 0; i < iteratives; i++) {
-                parts.Add($"{CalculateAttack(attacker, target, weapon, 5 * i, weaponAttack: true).FinalPercent}%");
+                parts.Add($"{CalculateAttack(attacker, target, weapon, 5 * i, weaponAttack: true, firstAttack: i == 0).FinalPercent}%");
             }
             p.Add("Full attack: " + string.Join(" / ", parts), Tone.Dim);
         }
@@ -165,7 +165,7 @@ internal static class OddsCalculator {
                     }
                 }
                 var attack = CalculateAttack(caster, target, weaponPlan.Weapon, weaponPlan.Penalty, weaponAttack: true,
-                    chargeBonus, chargeBonus != 0 ? $"Charge {FormatBonus(chargeBonus)}" : null);
+                    chargeBonus, chargeBonus != 0 ? $"Charge {FormatBonus(chargeBonus)}" : null, charge: weaponPlan.Charge);
                 AddAttackLines(p, attack, $"to hit ({weaponPlan.Weapon.Name})");
                 chances.Add(attack.FinalPercent);
             }
@@ -220,7 +220,7 @@ internal static class OddsCalculator {
     }
 
     private static AttackOdds CalculateAttack(UnitEntityData attacker, UnitEntityData target, ItemEntityWeapon weapon, int penalty, bool weaponAttack,
-        int extraBonus = 0, string extraNote = null) {
+        int extraBonus = 0, string extraNote = null, bool firstAttack = true, bool charge = false) {
         var attackType = weapon.Blueprint.AttackType;
 
         // Mirrors RuleAttackRoll.OnTrigger: attacking yourself, or touching a non-hostile, always hits.
@@ -243,7 +243,13 @@ internal static class OddsCalculator {
         RuleCalculateAttackBonus attackBonus;
         using (flankedOnArrival ? FlankingPredictor.Simulate(target, engagersOnArrival) : null) {
             ac = Rulebook.Trigger(new RuleCalculateAC(attacker, target, attackType)).Result;
-            attackBonus = Rulebook.Trigger(new RuleCalculateAttackBonus(attacker, target, weapon, penalty) { TargetIsFlanked = flankedOnArrival });
+            // Weapon attacks: hand the weapon calculation a stand-in for the attack (never triggered), as RuleAttackWithWeapon
+            // does. Enchantments that depend on the target (Bane, "+2 vs evil outsiders", ModifyWeaponStatsConditional) only
+            // apply when RuleCalculateWeaponStats.AttackWithWeapon tells them who is being attacked.
+            var weaponStats = weaponAttack
+                ? new RuleAttackWithWeapon(attacker, target, weapon, penalty) { IsFirstAttack = firstAttack, IsCharge = charge }.WeaponStats
+                : new RuleCalculateWeaponStats(attacker, weapon);
+            attackBonus = Rulebook.Trigger(new RuleCalculateAttackBonus(attacker, target, weaponStats, penalty) { TargetIsFlanked = flankedOnArrival });
         }
         int ab = attackBonus.Result;
 
