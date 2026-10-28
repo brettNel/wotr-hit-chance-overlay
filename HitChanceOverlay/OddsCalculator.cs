@@ -13,6 +13,7 @@ using Kingmaker.UnitLogic.Abilities;
 using Kingmaker.UnitLogic.Abilities.Blueprints;
 using Kingmaker.UnitLogic.Abilities.Components;
 using Kingmaker.UnitLogic.Abilities.Components.Base;
+using Kingmaker.UnitLogic.Mechanics.Actions;
 using Kingmaker.UnitLogic.Mechanics;
 using Kingmaker.UnitLogic.Parts;
 using Kingmaker.Utility;
@@ -59,7 +60,8 @@ internal static class OddsCalculator {
         return p;
     }
 
-    public static Prediction ForAbility(AbilityData ability, UnitEntityData target) {
+    /// <param name="inArea">The target is caught in the ability's area (not clicked), so it needn't be a valid target itself.</param>
+    public static Prediction ForAbility(AbilityData ability, UnitEntityData target, bool inArea = false) {
         var caster = ability.Caster?.Unit;
         if (caster == null) {
             return null;
@@ -70,7 +72,7 @@ internal static class OddsCalculator {
         var payload = blueprint.GetComponent<AbilityEffectStickyTouch>()?.TouchDeliveryAbility ?? blueprint;
         var p = new Prediction { Title = $"{caster.CharacterName}, {ability.Name} vs {target.CharacterName}" };
 
-        if (!ability.CanTarget(new TargetWrapper(target))) {
+        if (!inArea && !ability.CanTarget(new TargetWrapper(target))) {
             return null;
         }
 
@@ -149,6 +151,10 @@ internal static class OddsCalculator {
             } catch (Exception e) {
                 Overlay.LogOnce($"Weapon ability detection failed for {payload.name}: {e}");
             }
+            if (plan == null && (payload.GetComponent<AbilityCustomCharge>() != null || payload.GetComponent<AbilityDemonCharge>() != null)) {
+                // AbilityCustomCharge.Deliver does nothing without a melee weapon (e.g. a bow in hand): nothing to show.
+                return null;
+            }
             if (plan is { } weaponPlan) {
                 int chargeBonus = 0;
                 if (weaponPlan.Charge) {
@@ -203,6 +209,39 @@ internal static class OddsCalculator {
             string note = save.Precise ? "" : " (situational bonuses not included)";
             p.Add($"   DC {save.DC} vs {saveType} {FormatBonus(save.Bonus)}{note}", Tone.Dim);
             chances.Add(failPercent);
+
+            // More saves the full effect needs: further independent saves for other effects (Sickening Entanglement: Reflex,
+            // then Fortitude for sickened), and saves only made after failing this one (Phantasmal Killer, Weird: then
+            // Fortitude or die). Skipped when a branch we couldn't evaluate might hold them. DC as ContextActionSavingThrow.RunAction.
+            var more = new List<ContextActionSavingThrow>();
+            if (effects != null && !effects.DependsOnUnknownCondition) {
+                bool mainIsNested = payload.GetComponent<AbilityEffectRunAction>()?.SavingThrowType is null or SavingThrowType.Unknown;
+                more.AddRange(effects.IndependentSaves.Skip(mainIsNested ? 1 : 0));
+            }
+            more.AddRange(effects?.FollowUpSaves ?? new List<ContextActionSavingThrow>());
+            foreach (var followUp in more) {
+                int dc = followUp.UseDCFromContextSavingThrow ? save.DC
+                    : followUp.HasCustomDC ? followUp.CustomDC.Calculate(context) : abilityParams.DC;
+                var next = RulePreview.SavingThrow(context, target, followUp.Type, dc);
+                int nextPass = next.AutoPass ? 100
+                    : D20Percent(d => d == 20 || (d > 1 && d + next.Bonus + next.SuccessBonus >= next.DC));
+                int nextFail = 100 - nextPass;
+                bool isFollowUp = effects.FollowUpSaves.Contains(followUp);
+                if (effects.MustPassSaves.Contains(followUp)) {
+                    // Failing would kill, but this target can't die: the effect it suffers comes from passing.
+                    p.Add($"{nextPass}% to pass {followUp.Type} save (failing would kill, but it can't die)", ToneFor(nextPass));
+                    p.Add($"   DC {next.DC} vs {followUp.Type} {FormatBonus(next.Bonus)}", Tone.Dim);
+                    chances.Add(nextPass);
+                    continue;
+                }
+                p.Add($"{nextFail}% to fail {followUp.Type} save ({(isFollowUp ? "after failing the first" : "another effect")})", ToneFor(nextFail));
+                p.Add($"   DC {next.DC} vs {followUp.Type} {FormatBonus(next.Bonus)}", Tone.Dim);
+                chances.Add(nextFail);
+            }
+        }
+
+        if (effects?.AreaEffect == true) {
+            p.Add("   area effect: odds for one exposure (entering it, or one round inside)", Tone.Dim);
         }
 
         // Chance that every step goes our way (hit, beat SR, target fails save). No roll at all = 100%.

@@ -15,6 +15,7 @@ internal class Overlay : MonoBehaviour {
     private static readonly HashSet<string> s_Logged = new();
 
     private Prediction m_Prediction;
+    private List<AreaLabels.Label> m_AreaLabels;
     private float m_NextRecalculate;
     private GUIStyle m_Style;
     private int m_StyleFontSize;
@@ -31,15 +32,34 @@ internal class Overlay : MonoBehaviour {
         }
         m_NextRecalculate = Time.unscaledTime + RecalculateInterval;
         try {
-            m_Prediction = Compute();
+            // Area abilities: a label over each creature in the area instead of one at the cursor.
+            m_AreaLabels = ComputeArea();
+            m_Prediction = m_AreaLabels != null ? null : Compute();
             // The breakdown goes to the log only (once per distinct result), for checking odds against the combat log.
             if (m_Prediction?.Headline.Text != null) {
                 LogOnce($"Odds: {m_Prediction.Title} -> {m_Prediction.Headline.Text} | {string.Join("; ", m_Prediction.Lines.Select(l => l.Text.Trim()))}");
             }
         } catch (Exception e) {
             m_Prediction = null;
+            m_AreaLabels = null;
             LogOnce("Error computing odds: " + e);
         }
+    }
+
+    private static List<AreaLabels.Label> ComputeArea() {
+        if (!Main.Enabled || !Main.Settings.AreaLabels) {
+            return null;
+        }
+        var game = Game.Instance;
+        if (game?.Player == null || !CombatController.IsInTurnBasedCombat()) {
+            return null;
+        }
+        var turn = game.TurnBasedCombatController?.CurrentTurn;
+        var attacker = turn?.SelectedUnit;
+        if (attacker == null || !attacker.IsDirectlyControllable || turn.CurrentAbility == null) {
+            return null;
+        }
+        return AreaLabels.Compute(attacker, turn.CurrentAbility);
     }
 
     private static Prediction Compute() {
@@ -95,8 +115,16 @@ internal class Overlay : MonoBehaviour {
     }
 
     private void OnGUI() {
+        if (Event.current.type != EventType.Repaint) {
+            return;
+        }
+        var area = m_AreaLabels;
+        if (area != null) {
+            DrawAreaLabels(area);
+            return;
+        }
         var prediction = m_Prediction;
-        if (prediction?.Headline.Text == null || Event.current.type != EventType.Repaint) {
+        if (prediction?.Headline.Text == null) {
             return;
         }
         EnsureStyle();
@@ -112,6 +140,27 @@ internal class Overlay : MonoBehaviour {
         if (y + size.y > Screen.height) y = Screen.height - mouse.y - size.y - 12;
 
         GUI.Box(new Rect(x, y, size.x, size.y), content, m_Style);
+    }
+
+    // One label above each creature's head.
+    private void DrawAreaLabels(List<AreaLabels.Label> labels) {
+        var camera = Camera.main;
+        if (camera == null || labels.Count == 0) {
+            return;
+        }
+        EnsureStyle();
+        foreach (var label in labels) {
+            if (label.Unit == null || !label.Unit.IsInGame) {
+                continue;
+            }
+            Vector3 screen = camera.WorldToScreenPoint(label.Unit.EyePosition + Vector3.up * 0.7f);
+            if (screen.z <= 0) {
+                continue;
+            }
+            var content = new GUIContent($"<b>{Colorize(label.Prediction.Headline)}</b>");
+            Vector2 size = m_Style.CalcSize(content);
+            GUI.Box(new Rect(screen.x - size.x / 2, Screen.height - screen.y - size.y, size.x, size.y), content, m_Style);
+        }
     }
 
     private void EnsureStyle() {
