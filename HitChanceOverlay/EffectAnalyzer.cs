@@ -4,9 +4,11 @@ using Kingmaker.ElementsSystem;
 using Kingmaker.EntitySystem.Entities;
 using Kingmaker.EntitySystem.Stats;
 using Kingmaker.Enums.Damage;
+using Kingmaker.UnitLogic;
 using Kingmaker.UnitLogic.Abilities;
 using Kingmaker.UnitLogic.Abilities.Blueprints;
 using Kingmaker.UnitLogic.Abilities.Components;
+using Kingmaker.UnitLogic.Abilities.Components.Base;
 using Kingmaker.UnitLogic.Abilities.Components.AreaEffects;
 using Kingmaker.UnitLogic.Buffs.Blueprints;
 using Kingmaker.UnitLogic.Mechanics.Components;
@@ -226,6 +228,15 @@ internal static class EffectAnalyzer {
         list?.Actions != null && list.Actions.Length > 0 && list.Actions.All(a => a is ContextActionKill);
 
     private static void WalkArea(BlueprintAbilityAreaEffect area, EffectSummary summary, UnitEntityData target, int depth) {
+        foreach (var logic in area.ComponentsArray.OfType<AbilityAreaEffectLogic>()) {
+            if (logic is AreaEffectPit pit) {
+                WalkPit(pit, summary, target, depth);
+            } else if (logic is not AbilityAreaEffectRunAction && logic is not AbilityAreaEffectBuff && logic is not AbilityAreaEffectMovement) {
+                // Area logic we don't model: it does something, so never call the target immune because of it.
+                summary.OtherEffects++;
+                summary.DependsOnUnknownCondition = true;
+            }
+        }
         foreach (var run in area.GetComponents<AbilityAreaEffectRunAction>()) {
             Walk(run.UnitEnter != null && run.UnitEnter.HasActions ? run.UnitEnter : run.Round, summary, target, depth);
         }
@@ -239,6 +250,30 @@ internal static class EffectAnalyzer {
             }
             WalkAreaBuff(inside.Buff, summary, target, depth);
         }
+    }
+
+    /// <summary>
+    /// Pits (Create Pit, Acid Pit, ...), as UnitInPitController.HandleEvade decides it: immune facts or being too big means
+    /// no fall; otherwise a Reflex save against the spell's DC (none if helpless), and falling runs OnFallAction.
+    /// </summary>
+    private static void WalkPit(AreaEffectPit pit, EffectSummary summary, UnitEntityData target, int depth) {
+        bool immune = pit.EvadingImmunityFacts.Concat(pit.EffectsImmunityFacts).Any(f => f?.Get() != null && target.Descriptor.HasFact(f.Get()))
+                      || target.Descriptor.State.Size > pit.MaxUnitSize;
+        var caster = ContextData<MechanicsContext.Data>.Current?.Context?.MaybeCaster;
+        // ReflexCheck: units friendly to the caster (outside its group) step aside automatically.
+        if (caster != null && !caster.IsEnemy(target) && !caster.GroupId.Equals(target.GroupId) && !target.Faction.Neutral) {
+            immune = true;
+        }
+        if (immune) {
+            summary.ImmuneBuffs.Add("falling into the pit");
+            return;
+        }
+        if (!target.Descriptor.State.IsHelpless && summary.NestedSave == SavingThrowType.Unknown) {
+            summary.NestedSave = SavingThrowType.Reflex;
+        }
+        // Falling in is the effect (stuck in the pit); OnFallAction adds what the fall does (damage).
+        summary.Buffs++;
+        Walk(pit.OnFallAction, summary, target, depth + 1);
     }
 
     private static void WalkAreaBuff(BlueprintBuff buff, EffectSummary summary, UnitEntityData target, int depth) {
