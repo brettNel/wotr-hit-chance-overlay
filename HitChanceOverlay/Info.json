@@ -2,7 +2,7 @@
   "Id": "HitChanceOverlay",
   "DisplayName": "Hit Chance Overlay",
   "Author": "brett",
-  "Version": "0.3.0",
+  "Version": "0.4.0",
   "ManagerVersion": "0.27.11",
   "Requirements": [],
   "AssemblyName": "HitChanceOverlay.dll",
