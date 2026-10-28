@@ -7,7 +7,7 @@
 		<AssemblyName>HitChanceOverlay</AssemblyName>
 		<RootNamespace>HitChanceOverlay</RootNamespace>
 		<Description>Hit Chance Overlay</Description>
-		<Version>0.2.0</Version>
+		<Version>0.3.0</Version>
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 		<LangVersion>latest</LangVersion>
 		<ImplicitUsings>enable</ImplicitUsings>
