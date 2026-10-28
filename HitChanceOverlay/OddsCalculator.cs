@@ -213,22 +213,13 @@ internal static class OddsCalculator {
 
     // ---------- attack rolls ----------
 
-    internal readonly record struct AttackOdds(int AttackBonus, int TargetAC, int RollPercent, int ConcealmentPercent, int MirrorImages, bool AutoHit, bool TouchAC, string PendingToggles = null, bool DamageImmune = false) {
-        // Concealment is rolled first, then the d20; a hit then strikes the real target with chance 1/(images+1).
-        public int FinalPercent => AutoHit ? 100 : (int)Math.Round(RollPercent * (100 - ConcealmentPercent) / 100.0 / (MirrorImages + 1));
+    internal readonly record struct AttackOdds(int AttackBonus, int TargetAC, int RollPercent, double MissPercent, int MirrorImages, bool AutoHit, bool TouchAC, string PendingToggles = null, bool DamageImmune = false, string MissNote = null) {
+        // Concealment / miss chance is rolled first, then the d20; a hit then strikes the real target with chance 1/(images+1).
+        public int FinalPercent => AutoHit ? 100 : (int)Math.Round(RollPercent * (100 - MissPercent) / 100.0 / (MirrorImages + 1));
     }
 
     private static AttackOdds CalculateAttack(UnitEntityData attacker, UnitEntityData target, ItemEntityWeapon weapon, int penalty, bool weaponAttack,
         int extraBonus = 0, string extraNote = null, bool firstAttack = true, bool charge = false, MechanicsContext spellContext = null) {
-        var attackType = weapon.Blueprint.AttackType;
-
-        // Mirrors RuleAttackRoll.OnTrigger: attacking yourself, or touching a non-hostile, always hits.
-        bool confused = target.Descriptor.State.HasCondition(UnitCondition.Confusion);
-        bool friendly = !target.IsEnemy(attacker) && !target.Faction.Neutral && !confused;
-        if (attacker == target || (attackType.IsTouch() && friendly)) {
-            return new AttackOdds(0, 0, 100, 0, 0, true, attackType.IsTouch());
-        }
-
         // If walking up to the target will make it flanked, run the calculations with the game seeing that state, so the
         // flanking bonus and every flanking-dependent feature (Outflank, Back to Back, ...) apply as they will in the attack.
         HashSet<UnitEntityData> engagersOnArrival = null;
@@ -239,8 +230,11 @@ internal static class OddsCalculator {
         }
         bool flankedOnArrival = engagersOnArrival != null;
         int ac;
+        AttackType attackType;
         RuleCalculateAttackBonus attackBonus;
         bool damageImmune = false;
+        bool autoMiss;
+        var miss = default(MissChancePreview.Result);
         using (flankedOnArrival ? FlankingPredictor.Simulate(target, engagersOnArrival) : null) {
             // Weapon attacks: hand the weapon calculation a stand-in for the attack (never triggered), as RuleAttackWithWeapon
             // does. Enchantments that depend on the target (Bane, "+2 vs evil outsiders", ModifyWeaponStatsConditional) only
@@ -251,10 +245,27 @@ internal static class OddsCalculator {
             // In the game these rules inherit the attack's reason, which names the weapon (or the spell's context). Handlers
             // read it: brilliant energy only ignores armor when Reason.Item is its weapon.
             RuleReason reason = attackWithWeapon != null ? attackWithWeapon : spellContext;
-            ac = Rulebook.Trigger(new RuleCalculateAC(attacker, target, attackType) { Reason = reason }).Result;
             var weaponStats = attackWithWeapon?.WeaponStats ?? new RuleCalculateWeaponStats(attacker, weapon);
-            using (ArmedAttackBonuses.Arm(attacker, attackWithWeapon, new RuleAttackRoll(attacker, target, weaponStats, penalty))) {
-                attackBonus = Rulebook.Trigger(new RuleCalculateAttackBonus(attacker, target, weaponStats, penalty) { TargetIsFlanked = flankedOnArrival, Reason = reason });
+            // Mirrors RuleAttackRoll.OnTrigger step by step, with the attack roll's armed effects in place.
+            var attackRoll = new RuleAttackRoll(attacker, target, weaponStats, penalty);
+            using (ArmedAttackBonuses.Arm(attacker, target, attackWithWeapon, attackRoll)) {
+                attackType = attackRoll.AttackType;
+                // Attacking yourself, or touching a non-hostile, always hits.
+                bool confused = target.Descriptor.State.HasCondition(UnitCondition.Confusion);
+                bool friendly = !target.IsEnemy(attacker) && !target.Faction.Neutral && !confused;
+                if (attacker == target || (attackType.IsTouch() && friendly) || attackRoll.AutoHit) {
+                    return new AttackOdds(0, 0, 100, 0, 0, true, attackType.IsTouch());
+                }
+                autoMiss = attackRoll.AutoMiss;
+                try {
+                    miss = MissChancePreview.Calculate(attacker, target, attackRoll, weapon, weaponAttack);
+                } catch (Exception e) {
+                    Overlay.LogOnce("Miss chance preview failed: " + e);
+                }
+                ac = Rulebook.Trigger(new RuleCalculateAC(attacker, target, attackType) { Reason = reason, ForceFlatFooted = attackRoll.ForceFlatFooted }).Result;
+                var attackBonusRule = new RuleCalculateAttackBonus(attacker, target, weaponStats, penalty) { TargetIsFlanked = flankedOnArrival, Reason = reason };
+                attackBonusRule.CopyModifiersFrom(attackRoll);
+                attackBonus = Rulebook.Trigger(attackBonusRule);
             }
             if (attackWithWeapon != null) {
                 // The weapon stats are calculated now, so build the hit's damage the way the attack will (CreateRuleDealDamage
@@ -285,17 +296,14 @@ internal static class OddsCalculator {
         bool alwaysChance = attacker.State.Features.AlwaysChance;
 
         // Mirrors RuleAttackRoll.IsSuccessRoll.
-        int rollPercent = D20Percent(d => (d > 1 || alwaysChance) && (d == 20 || d + ab >= ac));
-
-        int concealment = UnitPartConcealment.Calculate(attacker, target, attack: true) switch {
-            Concealment.Partial => 20,
-            Concealment.Total => 50,
-            _ => 0,
-        };
+        int rollPercent = autoMiss ? 0 : D20Percent(d => (d > 1 || alwaysChance) && (d == 20 || d + ab >= ac));
+        if (autoMiss) {
+            miss = new MissChancePreview.Result(0, "automatic miss");
+        }
         // Mirrors the mirror image block in RuleAttackRoll.OnTrigger (UnitPartMirrorImage.TryAbsorbHit).
         int images = attacker.Descriptor.IsImmuneToVisualEffects ? 0 : target.Get<UnitPartMirrorImage>()?.MechanicsImages.Count ?? 0;
         string notes = flankedOnArrival ? (pending.Names == null ? "flanked on arrival" : pending.Names + ", flanked on arrival") : pending.Names;
-        return new AttackOdds(ab, ac, rollPercent, concealment, images, false, attackType.IsTouch(), notes, damageImmune);
+        return new AttackOdds(ab, ac, rollPercent, miss.MissPercent, images, false, attackType.IsTouch(), notes, damageImmune, miss.Note);
     }
 
     private static void AddAttackLines(Prediction p, AttackOdds odds, string label) {
@@ -306,8 +314,8 @@ internal static class OddsCalculator {
         }
         string ac = odds.TouchAC ? "touch AC" : "AC";
         string text = $"   {FormatBonus(odds.AttackBonus)} vs {ac} {odds.TargetAC}";
-        if (odds.ConcealmentPercent > 0) {
-            text += $", {odds.ConcealmentPercent}% concealment";
+        if (odds.MissNote != null) {
+            text += $", {odds.MissNote}";
         }
         if (odds.MirrorImages > 0) {
             text += $", {odds.MirrorImages} mirror image{(odds.MirrorImages == 1 ? "" : "s")}";
