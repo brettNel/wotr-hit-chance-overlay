@@ -102,6 +102,12 @@ internal static class EffectAnalyzer {
                     break;
 
                 case ContextActionSavingThrow save:
+                    // A save whose failure only brings effects the target is immune to doesn't stand between the caster and
+                    // anything (the Babau shrugs off Sickening Entanglement's sickened): leave it out of the odds.
+                    if (OnlyImmuneOnFailure(save, target, depth)) {
+                        Walk(save.Actions, summary, target, depth + 1);
+                        break;
+                    }
                     if (afterFailedSave) {
                         summary.FollowUpSaves.Add(save);
                         if (target.Descriptor.State.Features.Infallible && OnlyKillsOnFailure(save)) {
@@ -238,7 +244,8 @@ internal static class EffectAnalyzer {
             }
         }
         foreach (var run in area.GetComponents<AbilityAreaEffectRunAction>()) {
-            Walk(run.UnitEnter != null && run.UnitEnter.HasActions ? run.UnitEnter : run.Round, summary, target, depth);
+            // Entering, else one round inside, else moving inside (Spike Growth hurts as you move).
+            Walk(FirstThatActs(FirstThatActs(run.UnitEnter, run.Round, target, depth), run.UnitMove, target, depth), summary, target, depth);
         }
         foreach (var inside in area.GetComponents<AbilityAreaEffectBuff>()) {
             bool? applies = TryCheck(inside.Condition);
@@ -276,6 +283,26 @@ internal static class EffectAnalyzer {
         Walk(pit.OnFallAction, summary, target, depth + 1);
     }
 
+    private static bool OnlyImmuneOnFailure(ContextActionSavingThrow save, UnitEntityData target, int depth) {
+        var probe = new EffectSummary();
+        Walk(save.Actions, probe, target, depth + 1);
+        return !probe.AnyHarm && !probe.Heals && probe.ImmuneBuffs.Count + probe.ImmuneDamage.Count > 0;
+    }
+
+    // One exposure: what happens on entering, unless that does nothing to this target (Stinking Cloud's entry actions only
+    // cover a re-entry case), in which case one round inside.
+    private static ActionList FirstThatActs(ActionList onEnter, ActionList eachRound, UnitEntityData target, int depth) {
+        if (onEnter == null || !onEnter.HasActions) {
+            return eachRound;
+        }
+        if (eachRound == null || !eachRound.HasActions) {
+            return onEnter;
+        }
+        var probe = new EffectSummary();
+        Walk(onEnter, probe, target, depth);
+        return probe.DoesNothing && probe.NestedSave == SavingThrowType.Unknown ? eachRound : onEnter;
+    }
+
     private static void WalkAreaBuff(BlueprintBuff buff, EffectSummary summary, UnitEntityData target, int depth) {
         var parent = ContextData<MechanicsContext.Data>.Current?.Context;
         bool immune;
@@ -294,7 +321,7 @@ internal static class EffectAnalyzer {
             summary.Buffs++;
         }
         foreach (var actions in buff.GetComponents<AddFactContextActions>()) {
-            Walk(actions.Activated != null && actions.Activated.HasActions ? actions.Activated : actions.NewRound, summary, target, depth + 1);
+            Walk(FirstThatActs(actions.Activated, actions.NewRound, target, depth + 1), summary, target, depth + 1);
         }
     }
 
