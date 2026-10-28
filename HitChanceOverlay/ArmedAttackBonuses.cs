@@ -26,6 +26,7 @@ internal static class ArmedAttackBonuses {
         typeof(ShareFavoredEnemies),
         // The charge effect's +2 on non-AoO attacks (and AoO-only bonuses, which our non-AoO stand-in never arms).
         typeof(AttackOfOpportunityAttackBonus),
+        typeof(ChargeAttackBonus),
         typeof(ACBonusAgainstTarget),
         typeof(AttackTypeChange),
         typeof(MissAgainstFactOwner),
@@ -43,6 +44,14 @@ internal static class ArmedAttackBonuses {
         typeof(ACContextBonusAgainstFactOwner),
     };
 
+    // The target's facts armed by a weapon attack starting: Protection from Good/Evil's AC against that alignment, AC
+    // against melee/ranged/touch attacks, AC against attacks of opportunity (our stand-in is never one).
+    private static readonly HashSet<Type> s_TargetWeaponAttack = new() {
+        typeof(ArmorClassBonusAgainstAlignment),
+        typeof(ACBonusAgainstAttacks),
+        typeof(ACBonusAgainstAttackOfOpportunity),
+    };
+
     // Equipment enchantments subscribe globally and check the wearer themselves.
     private static readonly HashSet<Type> s_Global = new() {
         typeof(ACBonusAgainstFactOwnerEquipment),
@@ -52,11 +61,13 @@ internal static class ArmedAttackBonuses {
         var initiator = RulebookEventBus.InitiatorRulebookSubscribers.Get(attacker);
         var disarm = new Disarm();
         // Same order as the game: the weapon attack starts, then its attack roll (global, target, then initiator handlers).
+        var targetManager = RulebookEventBus.TargetRulebookSubscribers.Get(target);
         if (attackWithWeapon != null) {
+            Run(targetManager, attackWithWeapon, s_TargetWeaponAttack, disarm);
             Run(initiator, attackWithWeapon, s_Initiator, disarm);
         }
         Run(RulebookEventBus.GlobalRulebookSubscribers, attackRoll, s_Global, disarm);
-        Run(RulebookEventBus.TargetRulebookSubscribers.Get(target), attackRoll, s_Target, disarm);
+        Run(targetManager, attackRoll, s_Target, disarm);
         Run(initiator, attackRoll, s_Initiator, disarm);
         return disarm;
     }
