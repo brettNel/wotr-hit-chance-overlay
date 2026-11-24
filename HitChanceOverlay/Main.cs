@@ -43,6 +43,7 @@ public static class Main {
 
     private static void OnGUI(UnityModManager.ModEntry modEntry) {
         Settings.KeepAchievements = GUILayout.Toggle(Settings.KeepAchievements, " Keep achievements enabled while using mods (and don't mark saves as modded)");
+        Settings.WarningsOnly = GUILayout.Toggle(Settings.WarningsOnly, " Only show IMMUNE and HEAL (hide the percentages)");
         Settings.AreaLabels = GUILayout.Toggle(Settings.AreaLabels, " Area spells: show odds over every creature in the area (turn off if it slows your game)");
         GUILayout.BeginHorizontal();
         GUILayout.Label($"Font size: {Settings.FontSize}", GUILayout.Width(120));
@@ -54,6 +55,7 @@ public static class Main {
 public class Settings : UnityModManager.ModSettings {
     public bool KeepAchievements = true;
     public bool AreaLabels = true;
+    public bool WarningsOnly = false;
     public int FontSize = 20;
 
     public override void Save(UnityModManager.ModEntry modEntry) => Save(this, modEntry);

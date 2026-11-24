@@ -124,7 +124,7 @@ internal class Overlay : MonoBehaviour {
             return;
         }
         var prediction = m_Prediction;
-        if (prediction?.Headline.Text == null) {
+        if (prediction?.Headline.Text == null || !ShouldShow(prediction.Headline)) {
             return;
         }
         EnsureStyle();
@@ -150,7 +150,7 @@ internal class Overlay : MonoBehaviour {
         }
         EnsureStyle();
         foreach (var label in labels) {
-            if (label.Unit == null || !label.Unit.IsInGame) {
+            if (label.Unit == null || !label.Unit.IsInGame || !ShouldShow(label.Prediction.Headline)) {
                 continue;
             }
             Vector3 screen = camera.WorldToScreenPoint(label.Unit.EyePosition + Vector3.up * 0.7f);
@@ -162,6 +162,10 @@ internal class Overlay : MonoBehaviour {
             GUI.Box(new Rect(screen.x - size.x / 2, Screen.height - screen.y - size.y, size.x, size.y), content, m_Style);
         }
     }
+
+    // The "only warnings" setting hides the percentages and keeps IMMUNE and HEAL.
+    internal static bool ShouldShow(Line headline) =>
+        !Main.Settings.WarningsOnly || headline.Text == "IMMUNE" || headline.Text == "HEAL";
 
     private void EnsureStyle() {
         if (m_Style != null && m_StyleFontSize == Main.Settings.FontSize) {
