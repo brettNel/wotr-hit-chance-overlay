@@ -1,6 +1,9 @@
 using Kingmaker;
+using Kingmaker.Designers.Mechanics.Facts;
 using Kingmaker.EntitySystem.Entities;
+using Kingmaker.PubSubSystem;
 using Kingmaker.RuleSystem;
+using Kingmaker.RuleSystem.Rules;
 
 namespace HitChanceOverlay;
 
@@ -16,6 +19,7 @@ internal sealed class RuleScope : IDisposable {
     private readonly Rulebook m_Rulebook;
     private readonly RulebookEvent m_Event;
     private readonly bool m_Cleanup, m_TopLevel;
+    private readonly List<(IncreaseWeaponEnhancementBonusOnTargetFocus Component, int Bonus, UnitReference Target)> m_Focus;
 
     private RuleScope(RulebookEvent evt, bool cleanup) {
         m_Rulebook = Game.Instance.Rulebook;
@@ -32,7 +36,33 @@ internal sealed class RuleScope : IDisposable {
     public static RuleScope Current(RulebookEvent evt) => new RuleScope(evt, cleanup: false);
 
     /// <summary>The outermost scope for one preview, so nothing we run ever sees an empty stack.</summary>
-    public static RuleScope Root(UnitEntityData unit) => new RuleScope(new PreviewRoot(unit), cleanup: true);
+    public static RuleScope Root(UnitEntityData unit) {
+        var focus = SaveFocus(unit);
+        return new RuleScope(new PreviewRoot(unit), cleanup: true, focus);
+    }
+
+    private RuleScope(RulebookEvent evt, bool cleanup, List<(IncreaseWeaponEnhancementBonusOnTargetFocus, int, UnitReference)> focus)
+        : this(evt, cleanup) {
+        m_Focus = focus;
+    }
+
+    // Furyborn-style weapons build an enhancement bonus while attacking one target and drop it when an attack bonus is
+    // calculated against another (or clamp it during weapon stats). That state lives on the component itself, outside
+    // any rule, so it's saved before a preview and put back after.
+    private static List<(IncreaseWeaponEnhancementBonusOnTargetFocus, int, UnitReference)> SaveFocus(UnitEntityData unit) {
+        var manager = unit == null ? null : RulebookEventBus.InitiatorRulebookSubscribers.Get(unit);
+        if (manager == null || !manager.m_Listeners.TryGetValue(typeof(RuleCalculateAttackBonus), out var list)
+            || list is not RulebookSubscribersList<RuleCalculateAttackBonus> typed) {
+            return null;
+        }
+        List<(IncreaseWeaponEnhancementBonusOnTargetFocus, int, UnitReference)> saved = null;
+        foreach (var entry in typed.List) {
+            if (((entry as ISubscriptionProxy)?.GetSubscriber() ?? entry) is IncreaseWeaponEnhancementBonusOnTargetFocus c) {
+                (saved ??= new()).Add((c, c.m_CurrentEnhancementBonus, c.m_FocusingTarget));
+            }
+        }
+        return saved;
+    }
 
     public void Dispose() {
         var context = m_Rulebook.Context;
@@ -44,6 +74,12 @@ internal sealed class RuleScope : IDisposable {
                 m_Event.OnDidTrigger();
             } catch (Exception e) {
                 Overlay.LogOnce("Preview cleanup failed: " + e.Message);
+            }
+        }
+        if (m_Focus != null) {
+            foreach (var (component, bonus, target) in m_Focus) {
+                component.m_CurrentEnhancementBonus = bonus;
+                component.m_FocusingTarget = target;
             }
         }
         if (m_TopLevel && context.StackSize == 0) {
