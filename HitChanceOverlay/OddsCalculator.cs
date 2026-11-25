@@ -134,7 +134,8 @@ internal static class OddsCalculator {
         return true;
     }
 
-    // 95, 95, 70, 45, 45 -> "95%×2 · 70% · 45%×2"
+    // 95, 95, 75, 50, 25 -> "95%×2 · 75%×1" / "50%×1 · 25%×1": two groups per line, so a long full attack (9 attacks
+    // with haste and two weapons) stacks up instead of spreading across the screen.
     internal static string GroupPercents(List<int> percents) {
         var parts = new List<string>();
         for (int i = 0; i < percents.Count;) {
@@ -142,10 +143,28 @@ internal static class OddsCalculator {
             while (j < percents.Count && percents[j] == percents[i]) {
                 j++;
             }
-            parts.Add(j - i > 1 ? $"{percents[i]}%×{j - i}" : $"{percents[i]}%");
+            parts.Add($"{percents[i]}%×{j - i}");
             i = j;
         }
-        return string.Join(" · ", parts);
+        var text = new System.Text.StringBuilder();
+        for (int k = 0; k < parts.Count; k++) {
+            text.Append(k == 0 ? "" : k % 2 == 0 ? "\n" : " · ").Append(parts[k]);
+        }
+        return text.ToString();
+    }
+
+    /// <summary>
+    /// How many attack-roll projectiles the ability fires at its one target, as AbilityDeliverProjectile.Deliver counts them:
+    /// the rank it names (Scorching Ray: 1 to 3 by caster level) or its projectile list, at most the list's length.
+    /// </summary>
+    private static int RayCount(BlueprintAbility deliverBlueprint, MechanicsContext context) {
+        var deliver = deliverBlueprint.GetComponent<AbilityDeliverProjectile>();
+        if (deliver == null || !deliver.NeedAttackRoll || deliver.Type != AbilityProjectileType.Simple) {
+            return 1;
+        }
+        int listed = deliver.Projectiles.Length;
+        int count = deliver.UseMaxProjectilesCount ? context[deliver.MaxProjectilesCountRank] : listed;
+        return Math.Max(1, Math.Min(count, listed));
     }
 
     /// <summary>One attack of a full attack, as UnitAttack sets it on its RuleAttackWithWeapon.</summary>
@@ -245,6 +264,11 @@ internal static class OddsCalculator {
 
         var chances = new List<int>();
         int? hitChance = null;
+        // For the optional "lands · saves" display: the chance the spell lands at all (hit, beat spell resistance, a rolled HD
+        // pool covers the target; SR stops the damage too) and each saving throw's own chance (ST: the target fails it, or for
+        // a must-pass save passes it).
+        double landsChance = 1.0;
+        var checks = new List<string>();
 
         // 1. Attack roll (touch / ray / attack-roll projectile)
         if (attackWeapon != null) {
@@ -302,6 +326,7 @@ internal static class OddsCalculator {
                 string note = penetration.Precise ? "" : " (spell penetration feats not included)";
                 p.Add($"   {FormatBonus(penetration.Penetration)} vs SR {sr}{note}", Tone.Dim);
                 chances.Add(chance);
+                landsChance *= chance / 100.0;
             }
         }
 
@@ -320,6 +345,7 @@ internal static class OddsCalculator {
             string note = save.Precise ? "" : " (situational bonuses not included)";
             p.Add($"   DC {save.DC} vs {saveType} {FormatBonus(save.Bonus)}{note}", Tone.Dim);
             chances.Add(failPercent);
+            checks.Add($"ST{failPercent}%");
 
             // More saves the full effect needs: further independent saves for other effects (Sickening Entanglement: Reflex,
             // then Fortitude for sickened), and saves only made after failing this one (Phantasmal Killer, Weird: then
@@ -343,11 +369,13 @@ internal static class OddsCalculator {
                     p.Add($"{nextPass}% to pass {followUp.Type} save (failing would kill, but it can't die)", ToneFor(nextPass));
                     p.Add($"   DC {next.DC} vs {followUp.Type} {FormatBonus(next.Bonus)}", Tone.Dim);
                     chances.Add(nextPass);
+                    checks.Add($"ST{nextPass}%");
                     continue;
                 }
                 p.Add($"{nextFail}% to fail {followUp.Type} save ({(isFollowUp ? "after failing the first" : "another effect")})", ToneFor(nextFail));
                 p.Add($"   DC {next.DC} vs {followUp.Type} {FormatBonus(next.Bonus)}", Tone.Dim);
                 chances.Add(nextFail);
+                checks.Add($"ST{nextFail}%");
             }
         }
 
@@ -356,6 +384,7 @@ internal static class OddsCalculator {
             p.Add($"{cover}% the {hdPool.Dice} HD pool covers it", ToneFor(cover));
             p.Add($"   {target.Descriptor.Progression.CharacterLevel} HD vs the pool rolled for the cast", Tone.Dim);
             chances.Add(cover);
+            landsChance *= cover / 100.0;
         }
 
         if (effects?.AreaEffect == true) {
@@ -365,10 +394,20 @@ internal static class OddsCalculator {
         // Chance that every step goes our way (hit, beat SR, target fails save). No roll at all = 100%.
         int overall = (int)Math.Round(chances.Aggregate(1.0, (acc, c) => acc * c / 100.0) * 100);
         p.SetPercent(overall);
-        // Optional: an attack roll followed by SR or saves (Snowball: hit, then Fortitude or staggered) shows both the hit
-        // chance (what the damage needs) and the full effect.
-        if (Main.Settings?.HitAndEffect == true && hitChance is int hit && chances.Count > 1) {
-            p.Headline = new Line($"{hit}% · {overall}%", ToneFor(hit));
+        // Optional: an attack roll followed by saves (Snowball: hit, then Fortitude or staggered) shows the chance it lands
+        // (what the damage needs: hit, and beat SR if any) and each save's own chance, e.g. "95% · ST20%".
+        // Several rays at this one target (Scorching Ray: up to 3), each with its own attack roll: with the multiple-attacks
+        // option the count is shown like a full attack's, e.g. "90%×3".
+        int rays = Main.Settings?.FullAttack == true && hitChance != null ? RayCount(blueprint, context) : 1;
+        string count = rays > 1 ? $"×{rays}" : "";
+        if (Main.Settings?.HitAndEffect == true && hitChance is int hit && checks.Count > 0) {
+            int lands = (int)Math.Round(hit * landsChance);
+            p.Headline = new Line($"{lands}%{count} · " + string.Join(" · ", checks), ToneFor(lands));
+        } else if (rays > 1) {
+            p.Headline = new Line($"{overall}%{count}", ToneFor(overall));
+        }
+        if (rays > 1) {
+            p.Add($"{rays} rays, each with its own attack roll", Tone.Dim);
         }
         return p;
     }

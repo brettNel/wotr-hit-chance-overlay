@@ -186,7 +186,20 @@ internal class Overlay : MonoBehaviour {
         m_Style.normal.textColor = new Color(0.93f, 0.89f, 0.80f);
     }
 
-    private static string Colorize(Line line) => line.Tone switch {
+    // Several numbers in one label (full attacks "95%×2 · 75%×1", "95% · ST25%"): each gets its own colour, as it would on its
+    // own, instead of the first number's colour for all of them.
+    private static readonly System.Text.RegularExpressions.Regex s_Number = new(@"(ST)?(\d+)%(×\d+)?");
+
+    private static string Colorize(Line line) {
+        bool multi = line.Text != null && (line.Text.Contains(" · ") || line.Text.Contains("\n"))
+                     && line.Tone is Tone.Good or Tone.Okay or Tone.Bad;
+        if (!multi) {
+            return ColorizeWhole(line);
+        }
+        return s_Number.Replace(line.Text, m => ColorizeWhole(new Line(m.Value, OddsCalculator.ToneFor(int.Parse(m.Groups[2].Value)))));
+    }
+
+    private static string ColorizeWhole(Line line) => line.Tone switch {
         Tone.Good => $"<color=#7CD67C>{line.Text}</color>",
         Tone.Okay => $"<color=#E8C95A>{line.Text}</color>",
         Tone.Bad => $"<color=#E84A3A>{line.Text}</color>",
