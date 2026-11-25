@@ -45,8 +45,8 @@ public static class Main {
         Settings.KeepAchievements = GUILayout.Toggle(Settings.KeepAchievements, " Keep achievements enabled while using mods (and don't mark saves as modded)");
         Settings.WarningsOnly = GUILayout.Toggle(Settings.WarningsOnly, " Only show IMMUNE and HEAL (hide the percentages)");
         Settings.AreaLabels = GUILayout.Toggle(Settings.AreaLabels, " Area spells: show odds over every creature in the area (turn off if it slows your game)");
-        Settings.HitAndEffect = GUILayout.Toggle(Settings.HitAndEffect, " Spells with an attack roll and a save (e.g. Snowball): show chance it lands · ST chance the target fails its save (e.g. 95% · ST20%)");
-        Settings.FullAttack = GUILayout.Toggle(Settings.FullAttack, " Multiple attacks: every attack of a full attack, grouped (e.g. 95%×2 · 70%×1), and multi-ray spells (Scorching Ray: 90%×3)");
+        Settings.HitAndEffect = GUILayout.Toggle(Settings.HitAndEffect, " Attack + save spells: show chance it lands · ST save (e.g. 95% · ST20%)");
+        Settings.FullAttack = GUILayout.Toggle(Settings.FullAttack, " Multiple attacks: show each attack, grouped (e.g. 95%×2 · 70%×1)");
         GUILayout.BeginHorizontal();
         GUILayout.Label($"Font size: {Settings.FontSize}", GUILayout.Width(120));
         Settings.FontSize = (int)GUILayout.HorizontalSlider(Settings.FontSize, 10, 32, GUILayout.Width(200));
