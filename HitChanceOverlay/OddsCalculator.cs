@@ -5,6 +5,10 @@ using Kingmaker.EntitySystem.Entities;
 using Kingmaker.EntitySystem.Stats;
 using Kingmaker.Enums;
 using Kingmaker.Items;
+using Kingmaker.Items.Slots;
+using Kingmaker.UnitLogic.Commands;
+using Kingmaker;
+using TurnBased.Controllers;
 using Kingmaker.RuleSystem;
 using Kingmaker.RuleSystem.Rules;
 using Kingmaker.Settings;
@@ -65,8 +69,87 @@ internal static class OddsCalculator {
             return p;
         }
         p.SetPercent(first.FinalPercent);
+        if (Main.Settings?.FullAttack == true) {
+            List<int> all = null;
+            try {
+                all = FullAttackPercents(attacker, target);
+            } catch (Exception e) {
+                Overlay.LogOnce("Full attack preview failed: " + e);
+            }
+            if (all != null) {
+                p.Headline = new Line(GroupPercents(all), ToneFor(all[0]));
+                p.Add("Full attack: " + string.Join(" / ", all.Select(x => x + "%")), Tone.Dim);
+            }
+        }
         return p;
     }
+
+    /// <summary>
+    /// The hit chance of every attack in a full attack, in the game's order (UnitAttack.EnumerateFullAttack: iteratives,
+    /// haste, off hand, natural limbs, ...), or null when this attack wouldn't be a full attack (see CanFullAttack) or has
+    /// only one attack.
+    /// </summary>
+    internal static List<int> FullAttackPercents(UnitEntityData attacker, UnitEntityData target) {
+        if (!CanFullAttack(attacker, target)) {
+            return null;
+        }
+        var attacks = UnitAttack.EnumerateFullAttack(attacker).ToList();
+        if (attacks.Count <= 1) {
+            return null;
+        }
+        var result = new List<int>();
+        for (int i = 0; i < attacks.Count; i++) {
+            var weapon = attacks[i].Hand.MaybeWeapon;
+            if (weapon == null) {
+                return null;
+            }
+            var odds = CalculateAttack(attacker, target, weapon, attacks[i].AttackBonusPenalty, weaponAttack: true, firstAttack: i == 0,
+                fullAttack: new FullAttackSlot(i, attacks.Count, attacks[i].Hand));
+            result.Add(odds.FinalPercent);
+        }
+        return result;
+    }
+
+    // Mirrors UnitAttack.InitAttacks / IsFullAttackRestricted and TurnController's attack mode: no full attack when
+    // staggered, after a move action, in single-attack mode, or (melee) when the target is out of reach, since walking up
+    // turns it into a single attack.
+    private static bool CanFullAttack(UnitEntityData attacker, UnitEntityData target) {
+        if (attacker.Descriptor.State.HasCondition(UnitCondition.Staggered) || attacker.CombatState.IsFullAttackRestrictedBecauseOfMoveAction) {
+            return false;
+        }
+        if (CombatController.IsInTurnBasedCombat() && attacker.IsInCombat) {
+            if (attacker.IsMoveActionRestricted()) {
+                return false;
+            }
+            var turn = Game.Instance.TurnBasedCombatController?.CurrentTurn;
+            if (turn != null && !turn.GetEnabledFullAttack(attacker)) {
+                return false;
+            }
+        }
+        var weapon = attacker.GetFirstWeapon();
+        if (weapon != null && weapon.Blueprint.IsMelee
+            && attacker.DistanceTo(target) > UnitAttack.GetApproachRadius(weapon, attacker, target)) {
+            return false;
+        }
+        return true;
+    }
+
+    // 95, 95, 70, 45, 45 -> "95%×2 · 70% · 45%×2"
+    internal static string GroupPercents(List<int> percents) {
+        var parts = new List<string>();
+        for (int i = 0; i < percents.Count;) {
+            int j = i;
+            while (j < percents.Count && percents[j] == percents[i]) {
+                j++;
+            }
+            parts.Add(j - i > 1 ? $"{percents[i]}%×{j - i}" : $"{percents[i]}%");
+            i = j;
+        }
+        return string.Join(" · ", parts);
+    }
+
+    /// <summary>One attack of a full attack, as UnitAttack sets it on its RuleAttackWithWeapon.</summary>
+    internal sealed record FullAttackSlot(int Number, int Count, WeaponSlot Hand);
 
     /// <param name="inArea">The target is caught in the ability's area (not clicked), so it needn't be a valid target itself.</param>
     public static Prediction ForAbility(AbilityData ability, UnitEntityData target, bool inArea = false) {
@@ -98,6 +181,17 @@ internal static class OddsCalculator {
             context.Recalculate();
         } catch (Exception e) {
             Overlay.LogOnce($"Context recalculation failed for {payload.name}: {e.Message}");
+        }
+        // A dice-rolled HD pool (Hypnotism: 2d4 HD): analyse with the largest pool, and multiply in the exact chance the roll
+        // covers this creature below, instead of whatever Recalculate happened to roll.
+        HitDicePool hdPool = null;
+        try {
+            hdPool = HitDicePool.Find(blueprint, payload, context);
+            if (hdPool != null) {
+                context[hdPool.Type] = hdPool.Max;
+            }
+        } catch (Exception e) {
+            Overlay.LogOnce($"HD pool preview failed for {payload.name}: {e.Message}");
         }
 
         // Mirrors AbilityExecutionProcess.DoApplyEffect + RuleSpellResistanceCheck: spell immunity (descriptors, golems, a
@@ -150,6 +244,7 @@ internal static class OddsCalculator {
         }
 
         var chances = new List<int>();
+        int? hitChance = null;
 
         // 1. Attack roll (touch / ray / attack-roll projectile)
         if (attackWeapon != null) {
@@ -157,6 +252,7 @@ internal static class OddsCalculator {
             var attack = CalculateAttack(caster, target, GetWeaponEntity(attackWeapon), 0, weaponAttack: false, approach.AttackBonus, approach.Names, spellContext: context);
             AddAttackLines(p, attack, attackWeapon.AttackType.IsTouch() ? "to hit (touch)" : "to hit");
             chances.Add(attack.FinalPercent);
+            hitChance = attack.FinalPercent;
         } else {
             // 1b. Abilities that are a weapon attack (Charge, Vital Strike, Cleave, ...): the chance that attack hits.
             WeaponAbilities.Plan? plan = null;
@@ -191,6 +287,7 @@ internal static class OddsCalculator {
                     p.Add("Immune to weapon damage", Tone.Bad);
                 }
                 chances.Add(attack.FinalPercent);
+                hitChance = attack.FinalPercent;
             }
         }
 
@@ -254,6 +351,13 @@ internal static class OddsCalculator {
             }
         }
 
+        if (hdPool != null) {
+            int cover = (int)Math.Round(hdPool.CoverChance(target) * 100);
+            p.Add($"{cover}% the {hdPool.Dice} HD pool covers it", ToneFor(cover));
+            p.Add($"   {target.Descriptor.Progression.CharacterLevel} HD vs the pool rolled for the cast", Tone.Dim);
+            chances.Add(cover);
+        }
+
         if (effects?.AreaEffect == true) {
             p.Add("   area effect: odds for one exposure (entering it, or one round inside)", Tone.Dim);
         }
@@ -261,6 +365,11 @@ internal static class OddsCalculator {
         // Chance that every step goes our way (hit, beat SR, target fails save). No roll at all = 100%.
         int overall = (int)Math.Round(chances.Aggregate(1.0, (acc, c) => acc * c / 100.0) * 100);
         p.SetPercent(overall);
+        // Optional: an attack roll followed by SR or saves (Snowball: hit, then Fortitude or staggered) shows both the hit
+        // chance (what the damage needs) and the full effect.
+        if (Main.Settings?.HitAndEffect == true && hitChance is int hit && chances.Count > 1) {
+            p.Headline = new Line($"{hit}% · {overall}%", ToneFor(hit));
+        }
         return p;
     }
 
@@ -272,7 +381,8 @@ internal static class OddsCalculator {
     }
 
     private static AttackOdds CalculateAttack(UnitEntityData attacker, UnitEntityData target, ItemEntityWeapon weapon, int penalty, bool weaponAttack,
-        int extraBonus = 0, string extraNote = null, bool firstAttack = true, bool charge = false, MechanicsContext spellContext = null) {
+        int extraBonus = 0, string extraNote = null, bool firstAttack = true, bool charge = false, MechanicsContext spellContext = null,
+        FullAttackSlot fullAttack = null) {
         // If walking up to the target will make it flanked, run the calculations with the game seeing that state, so the
         // flanking bonus and every flanking-dependent feature (Outflank, Back to Back, ...) apply as they will in the attack.
         HashSet<UnitEntityData> engagersOnArrival = null;
@@ -295,6 +405,13 @@ internal static class OddsCalculator {
             var attackWithWeapon = weaponAttack
                 ? new RuleAttackWithWeapon(attacker, target, weapon, penalty) { IsFirstAttack = firstAttack, IsCharge = charge }
                 : null;
+            if (attackWithWeapon != null && fullAttack != null) {
+                // As UnitAttack does: two-weapon fighting penalties, "first attack" and per-attack effects read these.
+                attackWithWeapon.IsFullAttack = true;
+                attackWithWeapon.AttackNumber = fullAttack.Number;
+                attackWithWeapon.AttacksCount = fullAttack.Count;
+                attackWithWeapon.WeaponSlot = fullAttack.Hand;
+            }
             // In the game these rules inherit the attack's reason, which names the weapon (or the spell's context). Handlers
             // read it: brilliant energy only ignores armor when Reason.Item is its weapon.
             RuleReason reason = attackWithWeapon != null ? attackWithWeapon : spellContext;
