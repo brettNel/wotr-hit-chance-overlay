@@ -43,7 +43,15 @@ internal sealed class Prediction {
 internal static class OddsCalculator {
     private static readonly Dictionary<BlueprintItemWeapon, ItemEntityWeapon> s_WeaponCache = new();
 
+    // Every preview runs under a root rule (see RuleScope): handlers that attach temporary modifiers to "the current
+    // attack" must have one, or the modifiers would stay on the unit.
     public static Prediction ForWeapon(UnitEntityData attacker, UnitEntityData target) {
+        using (RuleScope.Root(attacker)) {
+            return ForWeaponCore(attacker, target);
+        }
+    }
+
+    private static Prediction ForWeaponCore(UnitEntityData attacker, UnitEntityData target) {
         var weapon = attacker.Body.PrimaryHand.MaybeWeapon ?? attacker.Body.EmptyHandWeapon;
         if (weapon == null) {
             return null;
@@ -62,6 +70,12 @@ internal static class OddsCalculator {
 
     /// <param name="inArea">The target is caught in the ability's area (not clicked), so it needn't be a valid target itself.</param>
     public static Prediction ForAbility(AbilityData ability, UnitEntityData target, bool inArea = false) {
+        using (RuleScope.Root(ability.Caster?.Unit ?? target)) {
+            return ForAbilityCore(ability, target, inArea);
+        }
+    }
+
+    private static Prediction ForAbilityCore(AbilityData ability, UnitEntityData target, bool inArea) {
         var caster = ability.Caster?.Unit;
         if (caster == null) {
             return null;
@@ -287,6 +301,10 @@ internal static class OddsCalculator {
             var weaponStats = attackWithWeapon?.WeaponStats ?? new RuleCalculateWeaponStats(attacker, weapon);
             // Mirrors RuleAttackRoll.OnTrigger step by step, with the attack roll's armed effects in place.
             var attackRoll = new RuleAttackRoll(attacker, target, weaponStats, penalty);
+            // The stand-ins are the parents of the calculations, as in a real attack (RuleAttackWithWeapon > RuleAttackRoll >
+            // RuleCalculateAC / RuleCalculateAttackBonus); on exit their temporary modifiers are removed.
+            using (RuleScope.StandIn(attackWithWeapon))
+            using (RuleScope.StandIn(attackRoll))
             using (ArmedAttackBonuses.Arm(attacker, target, attackWithWeapon, attackRoll)) {
                 attackType = attackRoll.AttackType;
                 // Attacking yourself, or touching a non-hostile, always hits.

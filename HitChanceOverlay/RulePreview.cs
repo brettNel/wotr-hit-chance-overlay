@@ -116,6 +116,13 @@ internal static class RulePreview {
     }
 
     private static void RunAboutToTriggerNoCleanup(RulebookEvent evt, MechanicsContext context, UnitEntityData target) {
+        // The rule is the current event while its handlers run, as in Rulebook.TriggerEvent.
+        using (RuleScope.Current(evt)) {
+            RunHandlers(evt, context, target);
+        }
+    }
+
+    private static void RunHandlers(RulebookEvent evt, MechanicsContext context, UnitEntityData target) {
         if (context == null) {
             // Weapon attacks run outside any mechanics context.
             RulebookEventBus.OnEventAboutToTrigger(evt);

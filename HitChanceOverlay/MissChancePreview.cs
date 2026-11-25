@@ -46,6 +46,7 @@ internal static class MissChancePreview {
         }
 
         var check = new RuleConcealmentCheck(attacker, target, attack: true);
+        using (RuleScope.StandIn(check))
         using (var disarm = new ArmedAttackBonuses.Disarm()) {
             ArmedAttackBonuses.Run<RulebookTargetEvent, ITargetRulebookSubscriber>(targetManager, check, s_ModifyHandlers, disarm);
         }
