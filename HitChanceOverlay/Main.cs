@@ -47,6 +47,11 @@ public static class Main {
         Settings.AreaLabels = GUILayout.Toggle(Settings.AreaLabels, " Area spells: show odds over every creature in the area (turn off if it slows your game)");
         Settings.HitAndEffect = GUILayout.Toggle(Settings.HitAndEffect, " Attack + save spells: show chance it lands · ST save (e.g. 95% · ST20%)");
         Settings.FullAttack = GUILayout.Toggle(Settings.FullAttack, " Multiple attacks: show each attack, grouped (e.g. 95%×2 · 70%×1)");
+        Settings.NoBackground = GUILayout.Toggle(Settings.NoBackground, " No background box (outlined text instead)");
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("Text colour:", GUILayout.Width(120));
+        Settings.TextColor = GUILayout.SelectionGrid(Settings.TextColor, System.Array.ConvertAll(Overlay.TextColors, c => c.Name), Overlay.TextColors.Length, GUILayout.ExpandWidth(false));
+        GUILayout.EndHorizontal();
         GUILayout.BeginHorizontal();
         GUILayout.Label($"Font size: {Settings.FontSize}", GUILayout.Width(120));
         Settings.FontSize = (int)GUILayout.HorizontalSlider(Settings.FontSize, 10, 32, GUILayout.Width(200));
@@ -61,6 +66,8 @@ public class Settings : UnityModManager.ModSettings {
     public bool HitAndEffect = false;
     public bool FullAttack = false;
     public int FontSize = 20;
+    public bool NoBackground = true;
+    public int TextColor = 0;
 
     public override void Save(UnityModManager.ModEntry modEntry) => Save(this, modEntry);
 }

@@ -19,6 +19,7 @@ internal class Overlay : MonoBehaviour {
     private float m_NextRecalculate;
     private GUIStyle m_Style;
     private int m_StyleFontSize;
+    private bool m_StyleNoBackground;
 
     internal static void LogOnce(string message) {
         if (s_Logged.Add(message)) {
@@ -139,7 +140,7 @@ internal class Overlay : MonoBehaviour {
         if (x + size.x > Screen.width) x = mouse.x - size.x - 12;
         if (y + size.y > Screen.height) y = Screen.height - mouse.y - size.y - 12;
 
-        GUI.Box(new Rect(x, y, size.x, size.y), content, m_Style);
+        DrawLabel(new Rect(x, y, size.x, size.y), content);
     }
 
     // One label above each creature's head.
@@ -159,7 +160,7 @@ internal class Overlay : MonoBehaviour {
             }
             var content = new GUIContent($"<b>{Colorize(label.Prediction.Headline)}</b>");
             Vector2 size = m_Style.CalcSize(content);
-            GUI.Box(new Rect(screen.x - size.x / 2, Screen.height - screen.y - size.y, size.x, size.y), content, m_Style);
+            DrawLabel(new Rect(screen.x - size.x / 2, Screen.height - screen.y - size.y, size.x, size.y), content);
         }
     }
 
@@ -168,13 +169,14 @@ internal class Overlay : MonoBehaviour {
         !Main.Settings.WarningsOnly || headline.Text == "IMMUNE" || headline.Text == "HEAL";
 
     private void EnsureStyle() {
-        if (m_Style != null && m_StyleFontSize == Main.Settings.FontSize) {
+        if (m_Style != null && m_StyleFontSize == Main.Settings.FontSize && m_StyleNoBackground == Main.Settings.NoBackground) {
             return;
         }
         var background = new Texture2D(1, 1);
         background.SetPixel(0, 0, new Color(0.05f, 0.04f, 0.03f, 0.85f));
         background.Apply();
         m_StyleFontSize = Main.Settings.FontSize;
+        m_StyleNoBackground = Main.Settings.NoBackground;
         m_Style = new GUIStyle(GUI.skin.box) {
             fontSize = m_StyleFontSize,
             richText = true,
@@ -182,15 +184,45 @@ internal class Overlay : MonoBehaviour {
             alignment = TextAnchor.UpperLeft,
             padding = new RectOffset(8, 8, 4, 5),
         };
-        m_Style.normal.background = background;
+        m_Style.normal.background = m_StyleNoBackground ? null : background;
         m_Style.normal.textColor = new Color(0.93f, 0.89f, 0.80f);
     }
+
+    // With no background the text gets a dark outline (the label drawn in black around it) so it stays readable on bright ground.
+    private static readonly System.Text.RegularExpressions.Regex s_ColorTag = new(@"</?color[^>]*>");
+
+    private void DrawLabel(Rect rect, GUIContent content) {
+        if (!m_StyleNoBackground) {
+            GUI.Box(rect, content, m_Style);
+            return;
+        }
+        var outline = new GUIContent($"<color=#000000E0>{s_ColorTag.Replace(content.text, "")}</color>");
+        float w = Mathf.Max(1f, m_StyleFontSize / 12f);
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                if (dx != 0 || dy != 0) {
+                    GUI.Label(new Rect(rect.x + dx * w, rect.y + dy * w, rect.width, rect.height), outline, m_Style);
+                }
+            }
+        }
+        GUI.Label(rect, content, m_Style);
+    }
+
+    // Text colour choices; the first keeps the green / yellow / red scale.
+    internal static readonly (string Name, string Hex)[] TextColors = {
+        ("By odds", null), ("White", "#F2EEE4"), ("Yellow", "#F5D547"), ("Cyan", "#5FD7F0"), ("Orange", "#FF9F3A"), ("Pink", "#FF79C6"),
+    };
 
     // Several numbers in one label (full attacks "95%×2 · 75%×1", "95% · ST25%"): each gets its own colour, as it would on its
     // own, instead of the first number's colour for all of them.
     private static readonly System.Text.RegularExpressions.Regex s_Number = new(@"(ST)?(\d+)%(×\d+)?");
 
     private static string Colorize(Line line) {
+        int pick = Main.Settings.TextColor;
+        if (pick > 0 && pick < TextColors.Length) {
+            string text = $"<color={TextColors[pick].Hex}>{line.Text}</color>";
+            return line.Tone == Tone.Immune ? $"<b>{text}</b>" : text;
+        }
         bool multi = line.Text != null && (line.Text.Contains(" · ") || line.Text.Contains("\n"))
                      && line.Tone is Tone.Good or Tone.Okay or Tone.Bad;
         if (!multi) {

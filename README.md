@@ -5,7 +5,7 @@ act. Select an attack or spell, hover over a creature, and a number appears next
 
 | Shown | Meaning |
 |---|---|
-| **`85%`** | Good odds (green above 70%, yellow 20–70%, red below 20%) |
+| **`85%`** | Good odds (green above 70%, yellow 20–70%, red below 20%, or one colour of your choice) |
 | **`IMMUNE`** | Nothing the spell does will affect the target |
 | **`HEAL`** | It would heal the target |
 
